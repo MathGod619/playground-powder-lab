@@ -23,7 +23,7 @@ export function createRenderer(world: World, base: HTMLCanvasElement, glow: HTML
     const { type, color, life, pulse } = world
     gpix.fill(0)
     const twinkle = pulse.twinkle > .05, speaker = pulse.speaker
-    const speakerColor = hsl(world.hue, 100, 62), surf = hsl(195, 100, 70 + pulse.kick * 15)
+    const speakerColor = hsl(world.hue, 100, 50 + world.energy.bass * 25), surf = hsl(195 + Math.sin(world.frame * .03) * world.energy.mid * 30, 100, 60 + pulse.kick * 15 + world.energy.mid * 15)
     const frameHash = Math.imul(world.frame, 2654435761)
     for (let i = 0; i < N; i++) {
       const t = type[i]
@@ -42,7 +42,7 @@ export function createRenderer(world: World, base: HTMLCanvasElement, glow: HTML
           else if (speaker > .05 && ((i % W + (i / W | 0)) & 1) === 0) gpix[i] = half(speakerColor)
           break
         case M.Water: if (i >= W && type[i - W] === M.Empty) { c = surf; gpix[i] = half(half(c)) } break
-        case M.Plant: if (life[i] > 0) { c = 0xff70ff70; gpix[i] = half(c) } break
+        case M.Plant: if (life[i] > 0) { c = hsl(115 + Math.sin(world.frame * .025 + i % W * .05) * world.energy.mid * 30, 90, 45 + world.energy.level * 25); gpix[i] = half(c) } break
         case M.Brick: if (life[i] === 1) gpix[i] = half(c); break
         case M.Bomb: {
           const fuse = life[i], urgent = fuse > 0 && fuse <= 3
@@ -143,3 +143,4 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, world: World, view: V
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
   }
 }
+

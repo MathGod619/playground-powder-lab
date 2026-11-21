@@ -2,7 +2,7 @@ import type { View } from './render.ts'
 import type { World } from './world.ts'
 
 export type Clip = { blob: Blob; url: string; name: string; type: string }
-export type Layers = { base: HTMLCanvasElement; glow: HTMLCanvasElement; bloom: HTMLCanvasElement; overlay: HTMLCanvasElement }
+export type Layers = { sky: HTMLCanvasElement; base: HTMLCanvasElement; glow: HTMLCanvasElement; bloom: HTMLCanvasElement; overlay: HTMLCanvasElement }
 
 const TYPES = [
   'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
@@ -81,6 +81,7 @@ export class ClipRecorder {
     ctx.fillStyle = g
     ctx.fillRect(0, 0, w, h)
 
+    if (world.scene !== 'sea') ctx.drawImage(layers.sky, 0, 0, w, h)
     const x = (view.x + shake[0]) * k, y = (view.y + shake[1]) * k
     const dw = world.width * view.scale * k, dh = world.height * view.scale * k
     ctx.imageSmoothingEnabled = false
@@ -96,6 +97,7 @@ export class ClipRecorder {
     ctx.filter = 'none'
     ctx.globalAlpha = 1
     ctx.globalCompositeOperation = 'source-over'
+    if (world.scene === 'sea') ctx.drawImage(layers.sky, 0, 0, w, h)
     ctx.drawImage(layers.overlay, 0, 0, w, h)
 
     if (dropAge < .9) {
@@ -125,3 +127,4 @@ export class ClipRecorder {
     ctx.globalAlpha = 1
   }
 }
+

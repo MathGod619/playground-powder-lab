@@ -3,6 +3,8 @@ import type { ChangeEvent, CSSProperties, DragEvent, PointerEvent as ReactPointe
 import { MapPlayer } from './analysis.ts'
 import { AudioEngine, type SourceMode } from './audio.ts'
 import { BeatDetector } from './detector.ts'
+import { automaticDrops, MusicEnvelope, RaveSession } from './immersion.ts'
+import { drawAtmosphere } from './atmosphere.ts'
 import { BLAST, isClickTool, isSolidTool, M, PADS, type Tool } from './materials.ts'
 import { ClipRecorder, canRecord, type Clip } from './recorder.ts'
 import { blastRadius, createRenderer, drawOverlay, type View } from './render.ts'
@@ -11,9 +13,9 @@ import { buildScene, gridFor, SCENES, WORLD_SIZES, type WorldSize } from './scen
 import { readLocal, writeLocal } from './storage.ts'
 import { DEFAULT_REACTIONS, World, type Reactions, type SceneId } from './world.ts'
 
-type Settings = { reactions: Reactions; glow: number; sensitivity: number; size: WorldSize }
+type Settings = { reactions: Reactions; glow: number; sensitivity: number; size: WorldSize; atmosphere: number }
 const SETTINGS_KEY = 'powder-rave-settings-v1'
-const DEFAULT_SETTINGS: Settings = { reactions: DEFAULT_REACTIONS, glow: 1, sensitivity: 1, size: 'medium' }
+const DEFAULT_SETTINGS: Settings = { reactions: DEFAULT_REACTIONS, glow: 1, sensitivity: 1, size: 'medium', atmosphere: 1 }
 const MAX_BRUSH = 30
 const CLIP_SECONDS = 10
 const STEP_MS = 1000 / 60
@@ -62,6 +64,11 @@ export function App() {
   const [armed, setArmed] = useState(false)
   const [clip, setClip] = useState<Clip | null>(null)
   const [mapped, setMapped] = useState<'none' | 'analysing' | 'ready'>('none')
+  const [dropReady, setDropReady] = useState(false)
+  const [rave, setRave] = useState({ active: false, finished: false, charge: 0, drops: 0, score: 0, seconds: 90 })
+  const session = useRef(new RaveSession())
+  const envelope = useRef(new MusicEnvelope())
+  const sky = useRef<HTMLCanvasElement>(null)
 
   const stage = useRef<HTMLDivElement>(null)
   const layer = useRef<HTMLDivElement>(null)
@@ -112,6 +119,7 @@ export function App() {
     const dpr = Math.min(2, devicePixelRatio || 1)
     overlay.current.width = innerWidth * dpr
     overlay.current.height = innerHeight * dpr
+    if (sky.current) { sky.current.width = innerWidth * dpr; sky.current.height = innerHeight * dpr }
   }
 
   function install(next: World) {
@@ -121,7 +129,19 @@ export function App() {
     layout()
   }
 
-  function triggerDrop() {
+  function triggerDrop(manual = true) {
+    if (live.current.paused) return
+    const challenge = session.current
+    if (challenge.active) {
+      if (!manual) return
+      if (challenge.charge < 1) { say('Let the music fill your energy meter first.'); return }
+      challenge.observe(world.current.particles, world.current.count(M.Flower), world.current.count(M.Brick))
+      challenge.drop()
+    }
+    setDropReady(false)
+    if (live.current.armed && !recorder.active && manual && canRecord()) {
+      recorder.start(8, audio.recordStream()); setArmed(false)
+    }
     dropAt.current = performance.now() / 1000
     if (recorder.active && catching.current) { recorder.endIn(6); catching.current = false }
     world.current.drop(live.current.paused)
@@ -140,35 +160,39 @@ export function App() {
     const root = document.documentElement
     const fx = overlay.current!.getContext('2d')!
     const sctx = spec.current!.getContext('2d')!
-    let frame = 0, acc = 0, prev = performance.now(), shownBpm = 0, shownCount: number | null = null, shownRec = 0
+    let frame = 0, acc = 0, prev = performance.now(), shownBpm = 0, shownCount: number | null = null, shownRec = 0, lastStatus = 0
     recorder.onDone = c => { setClip(c); setRecording(0); catching.current = false }
 
     const loop = (now: number) => {
       const w = world.current
       const { tool, brush, paused, settings, splash, armed } = live.current
-      acc += Math.min(100, now - prev)
+      const dt = Math.min(100, now - prev) / 1000
+      acc += dt * 1000
       prev = now
 
       const bands = audio.read()
+      const energy = envelope.current.update(bands, dt)
+      w.setEnergy(energy, dt, settings.reactions, paused)
+      if (!paused && !splash) session.current.tick(dt, energy.level)
       const heard = detector.update(bands, now / 1000)
       // A mapped song plays its beats from the map: exact timing, and we know when drops land.
       const songTime = audio.fileTime(), map = songTime === null ? null : mapPlayer.current
       const events = map ? map.update(songTime!) : heard
-      w.setMidrange(bands.mid, settings.reactions)
-      if (events.drop) triggerDrop()
+      if (events.drop && automaticDrops(audio.mode, session.current.active || session.current.finished)) triggerDrop(false)
+      if (audio.mode === 'tab' && (heard.breakdown || heard.drop)) setDropReady(true)
       if (events.kick) w.onKick(events.kick, settings.reactions, paused)
       if (events.hat) w.onHat(events.hat, settings.reactions, paused)
       const nowBpm = map ? map.map.bpm : detector.bpm
       if (nowBpm !== shownBpm) { shownBpm = nowBpm; setBpm(shownBpm) }
-      const until = map ? map.untilDrop(songTime!) : Infinity
+      const until = map && !session.current.active ? map.untilDrop(songTime!) : Infinity
       const count = until <= 3.2 ? Math.ceil(until) : null
       if (count !== shownCount) { shownCount = count; setCountdown(count) }
 
       // Catch the drop: start filming during the build-up so the clip lands on the drop.
       if (armed && !recorder.active) {
         const stream = audio.recordStream()
-        if (map && until <= 5) { recorder.start(until + 6, stream); setArmed(false) }
-        else if (!map && heard.breakdown) { recorder.start(20, stream); catching.current = true; setArmed(false) }
+        if (map && !session.current.active && !session.current.finished && until <= 5) { recorder.start(until + 6, stream); setArmed(false) }
+        else if (!map && audio.mode !== 'tab' && !session.current.active && heard.breakdown) { recorder.start(20, stream); catching.current = true; setArmed(false) }
       }
 
       for (let n = 0; acc >= STEP_MS && n < 2; n++) {
@@ -179,17 +203,25 @@ export function App() {
       }
       if (acc > STEP_MS) acc = 0
       w.decay()
+      if (now - lastStatus > 250) {
+        lastStatus = now
+        session.current.observe(w.particles, w.count(M.Flower), w.count(M.Brick))
+        const r = session.current
+        setRave({ active: r.active, finished: r.finished, charge: r.charge, drops: r.drops, score: r.score, seconds: Math.ceil(r.seconds) })
+      }
 
       const shake = w.pulse.shake, sx = (Math.random() - .5) * shake, sy = (Math.random() - .5) * shake
       if (layer.current) layer.current.style.transform = `translate(${sx}px,${sy}px) scale(${1 + w.pulse.kick * .006})`
       root.style.setProperty('--hue', (w.hue % 360).toFixed(1))
       root.style.setProperty('--pulse', w.pulse.kick.toFixed(3))
       root.style.setProperty('--glow', String(settings.glow))
+      root.style.setProperty('--energy', energy.level.toFixed(3))
 
+      drawAtmosphere(sky.current!.getContext('2d')!, w, now / 1000, settings.atmosphere)
       draw.current()
       drawOverlay(fx, w, view.current, overlay.current!.width / innerWidth, splash || recorder.active ? null : cursor.current, brush, tool)
       if (recorder.active) {
-        recorder.frame({ base: base.current!, glow: glow.current!, bloom: bloom.current!, overlay: overlay.current! }, w, view.current,
+        recorder.frame({ sky: sky.current!, base: base.current!, glow: glow.current!, bloom: bloom.current!, overlay: overlay.current! }, w, view.current,
           settings.glow, now / 1000 - dropAt.current, [sx, sy])
         const left = Math.ceil(recorder.remaining())
         if (left !== shownRec) { shownRec = left; setRecording(left) }
@@ -237,10 +269,12 @@ export function App() {
   // ---------------------------------------------------------------- actions
 
   function loadScene(id: SceneId) {
+    if (session.current.active) { say('Finish the Rave or return to Sandbox to change worlds.'); return }
     install(makeWorld(live.current.settings.size, id))
   }
 
   function changeSize(size: WorldSize) {
+    if (session.current.active) { say('Finish the Rave before changing world detail.'); return }
     setSettings(s => ({ ...s, size }))
     install(makeWorld(size, world.current.scene))
   }
@@ -253,6 +287,8 @@ export function App() {
       else if (mode === 'mic') { await audio.listenMic(); detector.reset(); say('Listening to your mic. Play something loud.') }
       else { await audio.listenTab(); detector.reset(); say('Hooked into tab audio. Play Spotify or YouTube in that tab.') }
       setSource(audio.mode)
+      setDropReady(false)
+      setArmed(false)
     } catch (error) {
       say(describe(error))
     }
@@ -295,7 +331,7 @@ export function App() {
   function toggleCatch() {
     if (!canRecord()) { say('Recording needs a recent Chrome, Edge, Firefox or Safari.'); return }
     setArmed(a => {
-      if (!a) say(mapPlayer.current ? 'Armed. Recording starts 5 seconds before the next drop.' : 'Armed. Recording starts when the beat drops out for the build-up.')
+      if (!a) say(audio.mode === 'tab' || session.current.active ? 'Armed. Your manual Drop starts an 8-second clip.' : mapPlayer.current ? 'Armed. Recording starts 5 seconds before the next drop.' : 'Armed. Recording starts when the beat drops out for the build-up.')
       return !a
     })
   }
@@ -320,6 +356,20 @@ export function App() {
     detector.reset()
     setSource('demo')
     setTimeout(() => say('Paint with the dock. Right-click erases. Wait for the drop.'), 600)
+  }
+
+  function startRave() {
+    const w = makeWorld(live.current.settings.size, world.current.scene)
+    install(w)
+    session.current.start(w.particles, w.count(M.Flower), w.count(M.Brick))
+    setRave({ active: true, finished: false, charge: 0, drops: 0, score: 0, seconds: 90 })
+    setDropReady(false)
+    say('90 seconds. Let the music charge three manual drops. Create particles, grow plants or demolish buildings to score.')
+  }
+
+  function leaveRave() {
+    session.current.active = session.current.finished = false
+    setRave(r => ({ ...r, active: false, finished: false }))
   }
 
   async function save() {
@@ -421,6 +471,7 @@ export function App() {
         onPointerLeave={e => { if (!stroke.current && e.pointerType === 'mouse') cursor.current = null }}
         onContextMenu={e => e.preventDefault()}
         onWheel={e => setBrush(b => Math.max(1, Math.min(MAX_BRUSH, b + (e.deltaY < 0 ? 1 : -1))))}>
+        <canvas ref={sky} className={`atmosphere ${scene === 'sea' ? 'underwater' : ''}`} />
         <div ref={layer} className="layer">
           <canvas ref={base} className="base" />
           <canvas ref={glow} className="glow" />
@@ -439,6 +490,10 @@ export function App() {
           </div>
         </div>
         <div className="deck">
+          <div className="chips">
+            <button className={`chip ${!rave.active && !rave.finished ? 'on' : ''}`} onClick={leaveRave}>Sandbox</button>
+            <button className={`chip ${rave.active || rave.finished ? 'on' : ''}`} onClick={startRave}>{rave.finished ? 'Play Rave again' : 'Rave Mode'}</button>
+          </div>
           <div className="chips">
             {(['demo', 'file', 'mic', 'tab'] as const).map(m => (
               <button key={m} className={`chip ${source === m ? 'on' : ''}`} onClick={() => pickSource(m)}>
@@ -468,6 +523,10 @@ export function App() {
           </div>
           {mixOpen && (
             <section className="mix" aria-label="Mix and world settings">
+              <label className="slider">Atmosphere
+                <input type="range" min="0" max="1" step=".1" value={settings.atmosphere}
+                  onChange={e => setSettings(s => ({ ...s, atmosphere: +e.target.value }))} />
+              </label>
               {SLIDERS.map(({ key, label, hint, min, max }) => {
                 const value = key === 'glow' || key === 'sensitivity' ? settings[key] : settings.reactions[key]
                 const set = (v: number) => setSettings(s => key === 'glow' || key === 'sensitivity'
@@ -514,10 +573,21 @@ export function App() {
         <button className="tool" title={paused ? 'Resume (Space)' : 'Freeze (Space)'} onClick={() => setPaused(p => !p)}>{paused ? '▶' : '❚❚'}</button>
         <button className="tool" title="Reset scene (R)" onClick={() => loadScene(scene)}>↺</button>
         <i className="sep" />
-        <button className="dropbtn" title="Force a drop (D)" onClick={triggerDrop}>DROP</button>
       </nav>
 
+      {!splash && <button className="dropbtn main-drop" title="Manual drop (D)" onClick={() => triggerDrop()}>
+        {rave.active ? rave.charge >= 1 ? 'DROP READY' : `CHARGING ${Math.floor(rave.charge * 100)}%` : dropReady ? 'DROP READY' : 'DROP'}
+      </button>}
       {activePad && !splash && <div className="hint" key={activePad.name}>{activePad.hint}</div>}
+      {!splash && (source === 'tab' || rave.active) && <div className="manual-drop">MANUAL DROP · Press D or use the DROP button</div>}
+      {!splash && (rave.active || rave.finished) && (
+        <section className="rave-status" aria-label="Rave challenge" aria-live="polite">
+          <strong>{rave.finished ? rave.drops === 3 ? 'RAVE COMPLETE' : 'TIME UP' : 'THREE DROPS'}</strong>
+          <span>{rave.drops}/3 drops · {rave.score.toLocaleString()} points · {rave.seconds}s</span>
+          {rave.active && <><progress max="1" value={rave.charge} aria-label="Drop energy" /><small>Music fills energy. Manual drops release it.</small></>}
+          {rave.finished && <button className="chip" onClick={leaveRave}>Return to Sandbox</button>}
+        </section>
+      )}
       {drops > 0 && <div className="drop-text" key={drops}>DROP</div>}
       {countdown !== null && <div className="countdown" key={countdown}>DROP IN <b>{countdown}</b></div>}
       {clip && (
@@ -555,3 +625,4 @@ export function App() {
     </div>
   )
 }
+

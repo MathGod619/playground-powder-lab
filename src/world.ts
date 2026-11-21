@@ -1,4 +1,5 @@
 import { colorFor, FIRE_PALETTE, hsl, obsidian, pack, STEAM, type Rng } from './color.ts'
+import type { Energy } from './immersion.ts'
 import {
   BOMB_DROP_ONLY, BOMB_FUSE, BREAKABLE, BRUSH_DENSITY, DENSITY, ERASE, FLUID, HOPPER, M, OVERWRITES, POWDER, type Tool,
 } from './materials.ts'
@@ -67,6 +68,10 @@ export class World {
   marks: { x: number; y: number }[] = []
   craterY = 0
   slosh = 0
+  energy: Energy = { bass: 0, mid: 0, treble: 0, level: 0 }
+  dropTicks = 0
+  pressure = 0
+  private continuousReactions: Reactions = DEFAULT_REACTIONS
   sloshDirection: 1 | -1 = 1
   beats = 0
   /** Ticks during which unsupported brick crumbles. */
@@ -212,8 +217,9 @@ export class World {
         if (--this.pLife[k] === 0) { this.kill(k--); continue }
         this.vy[k] += .045 * rules.gravity; this.vx[k] *= .985
       } else {
-        this.vy[k] += .13 * rules.gravity * (wet ? .3 : 1); this.vx[k] *= .996
+        this.vy[k] += .13 * rules.gravity * (this.scene === 'moon' ? 1 - this.energy.bass * .7 : 1) * (wet ? .3 : 1); this.vx[k] *= .996
       }
+      this.vx[k] += Math.sin(this.frame * .012) * this.energy.mid * .012 * this.continuousReactions.slosh
       if (wet) { this.vx[k] *= .9; this.vy[k] *= .9 }
       const ghost = this.pGhost[k] > 0
       if (ghost) this.pGhost[k]--
@@ -304,6 +310,22 @@ export class World {
   /** One simulation tick (60 per second). */
   step() {
     this.frame++
+    if (this.scene === 'volcano' && this.energy.bass > .15 && this.frame % 12 === 0)
+      this.erupt(this.width / 2, this.craterY, this.pressure * .7 * this.continuousReactions.kick)
+    if (this.frame % 18 === 0 && this.energy.treble > .15) this.sparkle(this.energy.treble * this.continuousReactions.sparks)
+    if (this.dropTicks > 0) {
+      this.dropTicks--
+      const age = 180 - this.dropTicks
+      if (age % 18 === 0) {
+        const x = this.width * (.1 + .8 * age / 180)
+        if (this.scene === 'volcano') this.erupt(this.width / 2, this.craterY, .8 + this.dropTicks / 180)
+        else if (this.scene === 'storm') this.strike()
+        else if (this.scene === 'moon') {
+          for (let n = 0; n < 6; n++) this.addParticle(x, 1, 1 + this.rng(), 2 + this.rng(), M.Spark, hsl(210, 100, 80), 120)
+        } else if (this.scene === 'sea') this.hooks.hat?.(this, 1)
+        else if (this.scene === 'garden') { this.growPlants(false); this.rings.push({ x, y: this.height * .8, r: 0, max: this.width * .25, hue: this.hue + age, width: 2 }) }
+      }
+    }
     this.cur = this.cur % 250 + 1
     if (this.quake > 0) this.quake--
     this.stepCells()
@@ -707,11 +729,21 @@ export class World {
     this.slosh = Math.min(.85, level * 1.6 * react.slosh)
   }
 
+  setEnergy(energy: Energy, dt: number, react: Reactions = DEFAULT_REACTIONS, paused = false) {
+    this.energy = { ...energy }
+    this.continuousReactions = react
+    if (paused) return
+    this.pressure = Math.max(0, Math.min(1, this.pressure + dt * (energy.bass * .3 - .035)))
+    this.slosh = Math.min(.95, energy.mid * 1.9 * react.slosh)
+  }
+
   /** The drop: everything goes off. */
   drop(paused = false) {
     Object.assign(this.pulse, { flash: 1, shake: 22, kick: 1 })
     this.hue += 150
     if (paused) return
+    this.dropTicks = 180
+    this.pressure = 0
     this.kickHop(1)
     this.speakerKick(1.5)
     this.growPlants(true)
@@ -757,3 +789,4 @@ export class World {
     return true
   }
 }
+
