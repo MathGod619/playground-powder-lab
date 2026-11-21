@@ -195,3 +195,16 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   .score { font-size: 20px }
   .menu { width: min(260px, calc(100vw - 24px)) }
 }
+
+/* ---- image placement ---- */
+.tool.on { background: rgba(255, 255, 255, .12); color: var(--ink) }
+.placer { position: fixed; left: 16px; bottom: 100px; z-index: 7; width: min(360px, calc(100vw - 24px)); padding: 12px; border-radius: 16px; background: rgba(14, 10, 24, .9); border: 1px solid var(--line); backdrop-filter: blur(16px); display: flex; flex-direction: column; gap: 8px; box-shadow: 0 20px 50px rgba(0, 0, 0, .5) }
+.placer-title { display: flex; flex-direction: column; gap: 2px }
+.placer-title b { font-family: Unbounded, sans-serif; font-weight: 900; font-size: 14px }
+.placer-title span, .placer-detail { font-size: 12px; color: var(--dim) }
+.placer-row { display: flex; align-items: center; gap: 10px }
+.check { display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer }
+.check input { accent-color: var(--accent); width: 15px; height: 15px }
+.placer-size { display: flex; align-items: center; gap: 2px; margin-left: auto; font: 700 12px 'Space Mono', monospace; font-variant-numeric: tabular-nums }
+.placer-size .tool { width: 30px; height: 30px }
+@media (max-width: 640px) { .placer { left: 12px; bottom: 96px } .placer-detail { display: none } }

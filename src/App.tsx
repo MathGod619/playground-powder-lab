@@ -5,6 +5,7 @@ import { AudioEngine, type SourceMode } from './audio.ts'
 import { BeatDetector } from './detector.ts'
 import { automaticDrops, beatOffset, MusicEnvelope, RaveSession, type DropResult } from './immersion.ts'
 import { drawAtmosphere } from './atmosphere.ts'
+import { fitSize, IMAGE_MODES, removeBackground, stampImage, type ImageMode, type Pixels } from './image.ts'
 import { BLAST, isClickTool, isSolidTool, M, PADS, type Tool } from './materials.ts'
 import { ClipRecorder, canRecord, type Clip } from './recorder.ts'
 import { blastRadius, createRenderer, drawOverlay, type View } from './render.ts'
@@ -69,6 +70,14 @@ export function App() {
   const [result, setResult] = useState<DropResult | null>(null)
   const [menu, setMenu] = useState<'none' | 'scenes' | 'rec'>('none')
   const [fullscreen, setFullscreen] = useState(false)
+  /** An uploaded picture waiting to be placed. */
+  const [placing, setPlacing] = useState<{ name: string; source: CanvasImageSource; width: number; height: number } | null>(null)
+  const [imgMode, setImgMode] = useState<ImageMode>('statue')
+  const [cutBg, setCutBg] = useState(true)
+  const [imgWidth, setImgWidth] = useState(120)
+  /** The placement preview, downsampled to world cells. */
+  const ghost = useRef<{ canvas: HTMLCanvasElement; pixels: Pixels } | null>(null)
+  const imagePicker = useRef<HTMLInputElement>(null)
   const canFullscreen = typeof document !== 'undefined' && !!document.fullscreenEnabled
   /** Last kick and beat length, on the same clock the drop button is read against. */
   const beat = useRef({ last: -Infinity, period: 0 })
@@ -96,8 +105,8 @@ export function App() {
   const world = useRef<World>(null!)
   const draw = useRef<() => void>(() => {})
   const view = useRef<View>({ x: 0, y: 0, scale: 1 })
-  const live = useRef({ tool, brush, paused, settings, splash, armed })
-  live.current = { tool, brush, paused, settings, splash, armed }
+  const live = useRef({ tool, brush, paused, settings, splash, armed, placing: !!placing })
+  live.current = { tool, brush, paused, settings, splash, armed, placing: !!placing }
   const stroke = useRef<{ id: number; erase: boolean; last: { x: number; y: number } } | null>(null)
   const cursor = useRef<{ sx: number; sy: number } | null>(null)
 
@@ -231,7 +240,9 @@ export function App() {
 
       drawAtmosphere(sky.current!.getContext('2d')!, w, now / 1000, settings.atmosphere)
       draw.current()
-      drawOverlay(fx, w, view.current, overlay.current!.width / innerWidth, splash || recorder.active ? null : cursor.current, brush, tool)
+      const placingNow = live.current.placing && ghost.current
+      drawOverlay(fx, w, view.current, overlay.current!.width / innerWidth, splash || recorder.active || placingNow ? null : cursor.current, brush, tool)
+      if (placingNow) drawGhost(fx, ghost.current!.canvas)
       if (recorder.active) {
         recorder.frame({ sky: sky.current!, base: base.current!, glow: glow.current!, bloom: bloom.current!, overlay: overlay.current! }, w, view.current,
           settings.glow, now / 1000 - dropAt.current, [sx, sy])
@@ -272,12 +283,111 @@ export function App() {
     else document.documentElement.requestFullscreen().catch(() => say('The browser blocked full screen.'))
   }
 
+  // ---------------------------------------------------------------- images
+
+  /** Rebuild the placement preview whenever the picture, size or background option changes. */
+  useEffect(() => {
+    if (!placing) { ghost.current = null; return }
+    const { width, height } = fitSize(placing.width, placing.height, imgWidth)
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })!
+    ctx.imageSmoothingQuality = 'high'
+    ctx.drawImage(placing.source, 0, 0, width, height)
+    let pixels: Pixels = ctx.getImageData(0, 0, width, height)
+    if (cutBg) {
+      pixels = removeBackground(pixels)
+      ctx.putImageData(new ImageData(new Uint8ClampedArray(pixels.data), width, height), 0, 0)
+    }
+    ghost.current = { canvas, pixels }
+  }, [placing, imgWidth, cutBg])
+
+  /** Where the preview sits: centred on the pointer, or the middle of the world before the pointer moves. */
+  function ghostOrigin() {
+    const g = ghost.current!, w = world.current, c = cursor.current
+    const cx = c ? (c.sx - view.current.x) / view.current.scale : w.width / 2
+    const cy = c ? (c.sy - view.current.y) / view.current.scale : w.height / 2
+    return { x: Math.round(cx - g.pixels.width / 2), y: Math.round(cy - g.pixels.height / 2) }
+  }
+
+  function drawGhost(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) {
+    const dpr = overlay.current!.width / innerWidth, s = view.current.scale * dpr
+    const { x, y } = ghostOrigin()
+    const X = view.current.x * dpr + x * s, Y = view.current.y * dpr + y * s, Wd = canvas.width * s, Hd = canvas.height * s
+    ctx.save()
+    ctx.imageSmoothingEnabled = false
+    ctx.globalAlpha = .72 + Math.sin(performance.now() / 180) * .12
+    ctx.drawImage(canvas, X, Y, Wd, Hd)
+    ctx.globalAlpha = 1
+    ctx.setLineDash([6 * dpr, 5 * dpr])
+    ctx.lineWidth = 1.5 * dpr
+    ctx.strokeStyle = 'rgba(255,255,255,.85)'
+    ctx.strokeRect(X, Y, Wd, Hd)
+    ctx.restore()
+  }
+
+  async function openImage(file: File) {
+    if (!file.type.startsWith('image/')) { say('That is not an image.'); return }
+    try {
+      const bitmap = await createImageBitmap(file)
+      const w = world.current
+      // start at a size that fits comfortably: under half the width and 70% of the height
+      const width = Math.round(Math.min(w.width * .45, w.height * .7 * bitmap.width / bitmap.height))
+      setImgWidth(Math.max(12, width))
+      setPlacing({ name: file.name, source: bitmap, width: bitmap.width, height: bitmap.height })
+      setMixOpen(false)
+      setMenu('none')
+      setSplash(false)
+    } catch {
+      say('That image could not be opened.')
+    }
+  }
+
+  function placeImage() {
+    const g = ghost.current
+    if (!g) return
+    const { x, y } = ghostOrigin()
+    const placed = stampImage(world.current, g.pixels, x, y, imgMode)
+    setPlacing(null)
+    if (!placed) { say('Nothing landed. Try moving it onto the screen or turning off Cut background.'); return }
+    say({
+      statue: 'Statue placed. Bombs and blasts will knock it down.',
+      sand: 'Sand painting placed. It lets go on the next kick.',
+      elements: 'Placed as elements. Watch it come alive.',
+    }[imgMode])
+  }
+
+  /** The latest placeImage, for the keyboard handler (which is registered once). */
+  const placeLatest = useRef(placeImage)
+  placeLatest.current = placeImage
+
+  const resizeImage = (delta: number) => setImgWidth(v => Math.max(12, Math.min(world.current?.width ?? 400, v + delta)))
+
+  // Paste an image from the clipboard (Cmd/Ctrl+V).
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const file = [...(e.clipboardData?.files ?? [])].find(f => f.type.startsWith('image/'))
+      if (file) { e.preventDefault(); void openImage(file) }
+    }
+    addEventListener('paste', onPaste)
+    return () => removeEventListener('paste', onPaste)
+  }, [])
+
   // Keyboard
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (live.current.splash || e.metaKey || e.ctrlKey || e.altKey) return
       if ((e.target as HTMLElement)?.closest?.('input')) return
       const key = e.key.toLowerCase()
+      if (live.current.placing) {
+        if (key === 'escape') setPlacing(null)
+        else if (key === '[' || key === '-') resizeImage(-6)
+        else if (key === ']' || key === '=') resizeImage(6)
+        else if (key === 'enter') placeLatest.current()
+        return
+      }
+      if (key === 'i') { imagePicker.current?.click(); return }
       const pad = PADS.find(p => p.key.toLowerCase() === key)
       if (pad) setTool(pad.tool)
       else if (key === '[' || key === '-') setBrush(b => Math.max(1, b - 1))
@@ -457,6 +567,12 @@ export function App() {
     e.currentTarget.setPointerCapture(e.pointerId)
     setMixOpen(false)
     setMenu('none')
+    cursor.current = { sx: e.clientX, sy: e.clientY }
+    if (placing) {
+      if (e.button === 2) { setPlacing(null); say('Image cancelled.') }
+      else placeImage()
+      return
+    }
     const cell = toCell(e)
     if (e.button === 0 && isClickTool(tool)) {
       if (tool === BLAST) world.current.blast(cell.x, cell.y, blastRadius(brush), .8 + brush / 25, true)
@@ -485,8 +601,10 @@ export function App() {
   function onDrop(e: DragEvent) {
     e.preventDefault()
     setDragging(false)
+    const image = [...e.dataTransfer.files].find(f => f.type.startsWith('image/'))
+    if (image) { void openImage(image); return }
     const file = [...e.dataTransfer.files].find(f => f.type.startsWith('audio'))
-    if (!file) { say('Drop an audio file to play it.'); return }
+    if (!file) { say('Drop an audio file to play it, or an image to drop into the world.'); return }
     setSplash(false)
     void playFile(file)
   }
@@ -500,7 +618,7 @@ export function App() {
         onPointerUp={endStroke} onPointerCancel={endStroke}
         onPointerLeave={e => { if (!stroke.current && e.pointerType === 'mouse') cursor.current = null }}
         onContextMenu={e => e.preventDefault()}
-        onWheel={e => setBrush(b => Math.max(1, Math.min(MAX_BRUSH, b + (e.deltaY < 0 ? 1 : -1))))}>
+        onWheel={e => placing ? resizeImage(e.deltaY < 0 ? 4 : -4) : setBrush(b => Math.max(1, Math.min(MAX_BRUSH, b + (e.deltaY < 0 ? 1 : -1))))}>
         <canvas ref={sky} className={`atmosphere ${scene === 'sea' ? 'underwater' : ''}`} />
         <div ref={layer} className="layer">
           <canvas ref={base} className="base" />
@@ -625,6 +743,11 @@ export function App() {
         <button className="tool" title="Bigger brush (])" onClick={() => setBrush(b => Math.min(MAX_BRUSH, b + 1))}>+</button>
         <button className="tool" title={paused ? 'Resume (Space)' : 'Freeze (Space)'} onClick={() => setPaused(p => !p)}>{paused ? '▶' : '❚❚'}</button>
         <button className="tool" title="Reset scene (R)" onClick={() => loadScene(scene)}>↺</button>
+        <button className={`tool ${placing ? 'on' : ''}`} title="Drop an image into the world (I). You can also drag one in or paste it." onClick={() => imagePicker.current?.click()}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="2" /><path d="m21 17-5-5-9 8" />
+          </svg>
+        </button>
         {canFullscreen && (
           <button className="tool" title={fullscreen ? 'Exit full screen (F)' : 'Full screen (F)'} aria-pressed={fullscreen} onClick={toggleFullscreen}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -689,6 +812,30 @@ export function App() {
       {dragging && <div className="dropzone">Drop it to play it</div>}
       {paused && !splash && <div className="frozen">FROZEN · music still playing</div>}
 
+      <input ref={imagePicker} type="file" accept="image/*" hidden onChange={e => {
+        const file = e.target.files?.[0]; e.target.value = ''
+        if (file) void openImage(file)
+      }} />
+      {placing && (
+        <section className="placer" aria-label="Place image">
+          <div className="placer-title"><b>Click to drop it in</b><span>Scroll or [ ] to resize · right-click or Esc to cancel</span></div>
+          <div className="seg">
+            {IMAGE_MODES.map(m => (
+              <button key={m.id} className={imgMode === m.id ? 'on' : ''} title={m.detail} onClick={() => setImgMode(m.id)}>{m.name}</button>
+            ))}
+          </div>
+          <small className="placer-detail">{IMAGE_MODES.find(m => m.id === imgMode)!.detail}</small>
+          <div className="placer-row">
+            <label className="check"><input type="checkbox" checked={cutBg} onChange={e => setCutBg(e.target.checked)} /> Cut background</label>
+            <span className="placer-size">
+              <button className="tool" aria-label="Smaller" onClick={() => resizeImage(-8)}>−</button>
+              <span>{imgWidth}</span>
+              <button className="tool" aria-label="Bigger" onClick={() => resizeImage(8)}>+</button>
+            </span>
+            <button className="chip" onClick={() => setPlacing(null)}>Cancel</button>
+          </div>
+        </section>
+      )}
       <input ref={audioPicker} type="file" accept="audio/*" hidden onChange={e => {
         const file = e.target.files?.[0]; e.target.value = ''
         if (file) void playFile(file)

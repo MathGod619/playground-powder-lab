@@ -5,6 +5,8 @@ import {
 } from './materials.ts'
 
 export const MAX_PARTICLES = 12000
+/** Sand life value meaning "held in place" (see image.ts). */
+export const HELD_SAND = 1
 export type SceneId = 'garden' | 'volcano' | 'city' | 'moon' | 'sea' | 'storm' | 'blank'
 export type Ring = { x: number; y: number; r: number; max: number; hue: number; width: number }
 export type Bolt = { points: [number, number][]; life: number }
@@ -162,7 +164,8 @@ export class World {
 
   /** Lifts a cell out of the grid and throws it. */
   launch(i: number, vx: number, vy: number, ghost = 0) {
-    if (this.addParticle(i % this.width + .5, (i / this.width | 0) + .5, vx, vy, this.type[i], this.color[i], this.life[i], ghost)) {
+    const life = this.type[i] === M.Sand ? 0 : this.life[i]
+    if (this.addParticle(i % this.width + .5, (i / this.width | 0) + .5, vx, vy, this.type[i], this.color[i], life, ghost)) {
       this.type[i] = M.Empty
       this.life[i] = 0
     }
@@ -368,7 +371,9 @@ export class World {
         if (t === M.Empty || this.stamp[i] === this.cur) continue
         if (slow && (POWDER[t] || t === M.Water || t === M.Oil) && rng() > this.rules.fall) continue
         switch (t) {
-          case M.Sand: case M.Glitter: case M.Gravel: this.fall(i, x, y, DENSITY[t]); break
+          case M.Sand: if (life[i] === HELD_SAND) break // an image held in place until the beat
+          // falls through
+          case M.Glitter: case M.Gravel: this.fall(i, x, y, DENSITY[t]); break
           case M.Gunpowder:
             if (this.touches(i, x, y, M.Fire, M.Lava)) { this.ignite(i, x, y); break }
             this.fall(i, x, y, DENSITY[t])
@@ -717,6 +722,13 @@ export class World {
     }
   }
 
+  /** Lets go of sand pictures that were holding their shape. Returns how many cells were released. */
+  release() {
+    let n = 0
+    for (let i = 0; i < this.size; i++) if (this.type[i] === M.Sand && this.life[i] === HELD_SAND) { this.life[i] = 0; n++ }
+    return n
+  }
+
   onKick(strength: number, react: Reactions = DEFAULT_REACTIONS, paused = false) {
     this.beats++
     this.pulse.kick = 1
@@ -724,6 +736,7 @@ export class World {
     this.hue += 7 + 10 * strength
     if (this.beats % 4 === 0) this.sloshDirection = this.sloshDirection === 1 ? -1 : 1
     if (paused) return
+    this.release()
     this.kickHop(strength * react.kick)
     this.speakerKick(strength * react.speakers)
     this.growPlants(false)
@@ -759,6 +772,7 @@ export class World {
     if (paused) return
     this.dropTicks = 180
     this.pressure = 0
+    this.release()
     this.kickHop(1)
     this.speakerKick(1.5)
     this.growPlants(true)

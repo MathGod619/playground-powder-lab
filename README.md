@@ -46,6 +46,18 @@ Explosions smash walls, brick and speakers into gravel and throw everything else
 - The world name at the top left opens the world list.
 - **Mix** has sliders for each reaction, atmosphere, glow and beat sensitivity (raise it for a quiet mic), the world detail level (Chunky / Normal / Fine), and Save / Load / Export / Import.
 
+## Drop in your own images
+
+Drag a picture onto the page, paste one (⌘V / Ctrl+V), press **I**, or use the picture button in the dock. A preview follows your pointer: scroll or **[ ]** to resize, then click (or **Enter**) to drop it in. Right-click or **Esc** cancels. **Cut background** removes a plain backdrop from photos; transparent PNGs come in clean either way.
+
+Pick what the picture is made of:
+
+- **Statue**: brick in its own colours. Blasts and bombs knock holes in it and anything left hanging crumbles into coloured rubble. In Rave Mode, demolishing it scores.
+- **Sand**: holds its shape until the next kick, then the beat shakes it into a pile of its own colours.
+- **Elements**: colours become materials. Blue turns to water, strong reds and oranges to lava, green to plants that grow on the beat, white to rain clouds, dark to wall, bright yellow to glitter, and muted tones such as skin and wood to sand.
+
+Images never leave your browser.
+
 ## Rave Mode
 
 Switch from **Sandbox** to **Rave** for a 90-second round with three drops. The music charges the DROP button; when it reads **DROP!**, press it (or **D**).
