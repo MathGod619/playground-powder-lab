@@ -62,5 +62,8 @@ POST /plan (bearer auth, application/json): {prompt, mode: adjust|create, contex
 Response: {plan, model}. Runtime schema/validation is in src/director-plan.mjs, shared by bridge and browser. TypeScript types are in src/director-plan.ts.
 Requests are capped at 12 KB; prompts at 1,600 characters; plans at 48 tools. One generation at a time, six per minute per socket address, 75-second upstream timeout. Proxy headers are deliberately not trusted.
 Unknown tools, scripts, file paths, arbitrary URLs, nonfinite values and scene replacement in Adjust mode are rejected.
+Generation requests cap the model at 16 operations and encode Adjust/Create mode into the output grammar.
+Invalid or truncated scene JSON gets one repair attempt within the same 75-second deadline. No unvalidated output is applied.
+Failures include the actual API rejection, validation reason or timeout, also printed in the bridge terminal without tokens, prompts or scene data. Instruct-only model requests omit the optional think parameter.
 
 Tests exercise the real HTTP bridge with a simulated Ollama upstream; they do not claim verification of your physical server or model quality. Run npm test and npm run build. On the real bridge, confirm Test connection, a generated preview, Apply, Undo, image preservation, template save and both audio modes.

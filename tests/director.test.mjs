@@ -96,6 +96,8 @@ test('bridge sends structured requests and returns validated plans', async t => 
     assert.deepEqual((await r.json()).plan, plan())
     assert.equal(payload.stream, false)
     assert.equal(payload.format.type, 'object')
+    assert.equal('think' in payload, false)
+    assert.equal(payload.format.properties.scene.type, 'string')
   })
 })
 test('bridge rejects replacement in adjust mode and rejects invalid model output', async t => {
@@ -110,5 +112,40 @@ test('bridge rejects replacement in adjust mode and rejects invalid model output
 test('bridge reports missing model rather than claiming a connection', async t => {
   await withBridge(t, async () => Response.json({ models: [] }), async request => {
     assert.equal((await request('/health')).status, 503)
+  })
+})
+test('bridge repairs an invalid scene once with the concrete validation error', async t => {
+  let attempts = 0
+  await withBridge(t, async (_url, options) => {
+    const payload = JSON.parse(options.body)
+    assert.deepEqual(payload.format.properties.scene, { type: 'null' })
+    attempts++
+    if (attempts === 1) return Response.json({ message: { content: '{"wrong":"shape"}' } })
+    assert.match(payload.messages.at(-1).content, /unsupported fields/)
+    const fixed = plan(); fixed.scene = null
+    return Response.json({ message: { content: JSON.stringify(fixed) } })
+  }, async request => {
+    const response = await request('/plan', { mode: 'adjust', prompt: 'Lighter gravity', context: {} })
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).plan.scene, null)
+    assert.equal(attempts, 2)
+  })
+})
+test('bridge exposes Ollama API rejection rather than blaming the prompt', async t => {
+  let calls = 0
+  await withBridge(t, async () => { calls++; return Response.json({ error: 'model does not support this option' }, { status: 400 }) }, async request => {
+    const response = await request('/plan', { mode: 'create', prompt: 'A garden', context: {} })
+    assert.equal(response.status, 502)
+    assert.match((await response.json()).error, /HTTP 400.*model does not support/)
+    assert.equal(calls, 1)
+  })
+})
+test('bridge retries truncated output and stops after the bounded repair', async t => {
+  let calls = 0
+  await withBridge(t, async () => { calls++; return Response.json({ done_reason: 'length', message: { content: '{"title":' } }) }, async request => {
+    const response = await request('/plan', { mode: 'create', prompt: 'A garden', context: {} })
+    assert.equal(response.status, 502)
+    assert.match((await response.json()).error, /cut off at the output limit/)
+    assert.equal(calls, 2)
   })
 })
