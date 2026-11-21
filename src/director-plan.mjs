@@ -49,12 +49,15 @@ export function validatePlan(value) {
     }
     if (!color(e.waterColor) || !Array.isArray(p.operations) || p.operations.length > 48)
         throw new Error('Invalid scene operations.');
-    for (const raw of p.operations) {
+    for (const [index, raw] of p.operations.entries()) {
         const o = exact(raw, ['shape', 'material', 'x', 'y', 'w', 'h', 'color']);
         if (!SHAPES.includes(o.shape) || !MATERIALS.includes(o.material) || !color(o.color))
             throw new Error('Unsupported scene tool.');
-        if (!bounded(o.x, 0, 1) || !bounded(o.y, 0, 1) || !bounded(o.w, .005, 1) || !bounded(o.h, .005, 1))
-            throw new Error('Scene coordinates are out of range.');
+        for (const key of ['x', 'y', 'w', 'h']) {
+            const min = key === 'x' || key === 'y' ? 0 : .005;
+            if (!bounded(o[key], min, 1))
+                throw new Error('Operation ' + (index + 1) + ' (' + o.shape + ') ' + key + '=' + String(o[key]).slice(0, 40) + ' must be ' + min + '..1 after coordinate conversion.');
+        }
     }
     return structuredClone(p);
 }

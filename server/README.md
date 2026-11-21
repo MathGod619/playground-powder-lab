@@ -95,7 +95,10 @@ Response: {plan, model}. Runtime schema/validation is in src/director-plan.mjs, 
 Requests are capped at 12 KB; prompts at 1,600 characters; plans at 48 tools. One generation at a time, six per minute per socket address, 75-second upstream timeout. Proxy headers are deliberately not trusted.
 Unknown tools, scripts, file paths, arbitrary URLs, nonfinite values and scene replacement in Adjust mode are rejected.
 Generation requests cap the model at 16 operations and encode Adjust/Create mode into the output grammar.
+The model uses an explicit coordinateSpace: percent drawing contract (0–100) and never receives grid dimensions. The bridge converts percentages to the game's strict 0–1 coordinates, repairs zero-size strokes to the minimum visible size, and rejects other out-of-range positions with the exact operation and field. It does not guess units from large numbers.
 Invalid or truncated scene JSON gets one repair attempt within the same 75-second deadline. No unvalidated output is applied.
 Failures include the actual API rejection, validation reason or timeout, also printed in the bridge terminal without tokens, prompts or scene data. Instruct-only model requests omit the optional think parameter.
 
 Tests exercise the real HTTP bridge with a simulated Ollama upstream; they do not claim verification of your physical server or model quality. Run npm test and npm run build. On the real bridge, confirm Test connection, a generated preview, Apply, Undo, image preservation, template save and both audio modes.
+
+For an actual model check on Ubuntu without using the permanent bridge token: node server/check-model.mjs. This asks the configured Ollama model to generate an aquarium, validates the result, and prints pass/fail plus non-secret coordinate details.

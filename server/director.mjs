@@ -1,14 +1,17 @@
 import http from 'node:http'
 import { timingSafeEqual } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
-import { PLAN_SCHEMA, validatePlan } from '../src/director-plan.mjs'
+import { modelSchema, parseModelPlan } from './model-plan.mjs'
 
 const SYSTEM = `You are the Powder Rave scene director. Return only a scene plan matching the supplied JSON schema.
-Coordinates are normalized 0..1, x left to right, y top to bottom; w/h are sizes. Existing terrain usually starts near y=.8.
+Use coordinateSpace: "percent". ALL operation x/y/w/h values are percentages of the screen, 0 to 100.
+x/y are the top-left corner, w/h are sizes, not the bottom-right corner. x goes left to right; y goes top to bottom.
+Example: x=20,y=40,w=10,h=45 means a structure 10% wide and 45% tall starting 20% across and 40% down.
+Existing terrain usually starts near y=80. Use positive widths/heights. Do not output pixel/cell coordinates.
 Use null for every environment setting the user did not request changing. gravity 1 is normal; fall 1 is normal; wind -1 left, 1 right.
 kick/speakers/sparks/slosh control music reactions from 0 to 2. Water can be recolored with waterColor.
 For adjust mode scene MUST be null: preserve current world and uploaded images. For create mode select a base scene (blank for custom architecture).
-Image pixel data is NEVER supplied. If imageBounds exists use its normalized bounding rectangle to build around it.
+Image pixel data is NEVER supplied. imageBounds, when provided, also uses percentages, so build around that rectangle.
 Use at most 16 operations per response. Prefer a compact useful scene over dozens of objects. Include all operation fields. Bombs are individual points triggered by the manual drop; speakers are small rectangles.
 Towers and bridges should connect and stand on terrain. Do not overlap uploaded images unless explicitly requested.
 Do not claim unsupported features like ice, arbitrary code, files, sound generation, networking, or running commands.
@@ -65,11 +68,16 @@ export function createDirectorServer({ token, origins, model = 'qwen3:4b-instruc
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 75000)
     res.on('close', () => { if (!res.writableEnded) controller.abort() })
     try {
-      const format = structuredClone(PLAN_SCHEMA)
-      // Encode the mode in the grammar, so a valid-looking replacement cannot erase an edit.
-      format.properties.scene = body.mode === 'adjust' ? { type: 'null' } : { type: 'string', enum: ['garden', 'volcano', 'city', 'moon', 'sea', 'storm', 'blank'] }
-      format.properties.operations.maxItems = 16
-      const messages = [{ role: 'system', content: SYSTEM }, { role: 'user', content: JSON.stringify(body) + '\n/no_think' }]
+      const format = modelSchema(body.mode)
+      const context = { ...body.context }
+      // Grid dimensions are a rendering detail and can tempt small models to
+      // mix cell coordinates with screen percentages.
+      delete context.width; delete context.height
+      if (context.imageBounds && typeof context.imageBounds === 'object') {
+        const bounds = context.imageBounds
+        context.imageBounds = Object.fromEntries(['x', 'y', 'w', 'h'].map(k => [k, typeof bounds[k] === 'number' ? bounds[k] * 100 : null]))
+      }
+      const messages = [{ role: 'system', content: SYSTEM }, { role: 'user', content: JSON.stringify({ ...body, context }) + '\n/no_think' }]
       for (let attempt = 0; attempt < 2; attempt++) {
         const upstream = await fetchImpl(ollamaUrl + '/api/chat', { method: 'POST', signal: controller.signal,
           headers: { 'Content-Type': 'application/json' },
@@ -87,7 +95,7 @@ export function createDirectorServer({ token, origins, model = 'qwen3:4b-instruc
         try {
           if (reply.done_reason === 'length') throw new Error('The scene was cut off at the output limit.')
           if (typeof reply.message?.content !== 'string' || !reply.message.content.trim()) throw new Error('Ollama returned no scene content.')
-          const plan = validatePlan(JSON.parse(reply.message.content))
+          const plan = parseModelPlan(JSON.parse(reply.message.content))
           if (body.mode === 'adjust' && plan.scene !== null) throw new Error('Adjust mode requires scene: null.')
           if (body.mode === 'create' && plan.scene === null) throw new Error('Create mode requires a base scene.')
           send(200, { plan, model }); return
@@ -95,7 +103,7 @@ export function createDirectorServer({ token, origins, model = 'qwen3:4b-instruc
           const reason = validation instanceof SyntaxError ? 'The response was not complete valid JSON.' : validation.message
           if (attempt === 1) throw new Error('Scene validation failed after one repair: ' + reason)
           messages.push({ role: 'assistant', content: String(reply.message?.content || '').slice(0, 16000) })
-          messages.push({ role: 'user', content: 'Repair the scene JSON. Error: ' + reason + ' Return a complete compact scene using at most 8 operations and all required fields. Unchanged environment values must be null. /no_think' })
+          messages.push({ role: 'user', content: 'Repair the scene JSON. Error: ' + reason + ' Return a complete compact scene using at most 8 operations and all required fields. Set coordinateSpace to percent. Each x/y must be 0..100; w/h must be positive and <=100. For example x=20,y=40,w=10,h=45. Unchanged environment values must be null. /no_think' })
         }
       }
     } catch (error) {
