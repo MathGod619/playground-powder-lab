@@ -1,7 +1,7 @@
 import http from 'node:http'
 import { timingSafeEqual } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
-import { PLAN_SCHEMA, validatePlan } from '../src/director-plan.ts'
+import { PLAN_SCHEMA, validatePlan } from '../src/director-plan.mjs'
 
 const SYSTEM = `You are the Powder Rave scene director. Return only a scene plan matching the supplied JSON schema.
 Coordinates are normalized 0..1, x left to right, y top to bottom; w/h are sizes. Existing terrain usually starts near y=.8.

@@ -15,7 +15,7 @@ No server connection is preconfigured. Example is an explicitly labelled built-i
 
 ## Start privately on Ubuntu
 
-Requires Node 24+ and an already installed Ollama model (default: qwen3:4b-instruct).
+The bridge requires Node 22+ and an already installed Ollama model (default: qwen3:4b-instruct). It runs plain JavaScript and does not require built-in TypeScript support or npm dependencies. The frontend build/tests still use the development toolchain.
 Use a separate checkout of this repository. Do not replace the Epsilon/Pipeline services or expose Ollama's port.
 
 From that checkout, on Ubuntu:
@@ -59,7 +59,7 @@ For an existing approved private HTTPS route, proxy a dedicated path/port to 127
 
 GET /health (bearer auth): verifies Ollama and the configured model.
 POST /plan (bearer auth, application/json): {prompt, mode: adjust|create, context}.
-Response: {plan, model}. Schema is in src/director-plan.ts and revalidated in bridge and client.
+Response: {plan, model}. Runtime schema/validation is in src/director-plan.mjs, shared by bridge and browser. TypeScript types are in src/director-plan.ts.
 Requests are capped at 12 KB; prompts at 1,600 characters; plans at 48 tools. One generation at a time, six per minute per socket address, 75-second upstream timeout. Proxy headers are deliberately not trusted.
 Unknown tools, scripts, file paths, arbitrary URLs, nonfinite values and scene replacement in Adjust mode are rejected.
 
