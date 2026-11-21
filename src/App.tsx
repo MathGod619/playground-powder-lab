@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, CSSProperties, DragEvent, PointerEvent as ReactPointerEvent } from 'react'
+import { MapPlayer } from './analysis.ts'
 import { AudioEngine, type SourceMode } from './audio.ts'
 import { BeatDetector } from './detector.ts'
-import { isSolidTool, M, PADS, type Tool } from './materials.ts'
-import { createRenderer, drawOverlay, type View } from './render.ts'
+import { BLAST, isClickTool, isSolidTool, M, PADS, type Tool } from './materials.ts'
+import { ClipRecorder, canRecord, type Clip } from './recorder.ts'
+import { blastRadius, createRenderer, drawOverlay, type View } from './render.ts'
 import { decodeWorld, encodeWorld, MAX_FILE_BYTES, SAVE_KEY } from './save.ts'
 import { buildScene, gridFor, SCENES, WORLD_SIZES, type WorldSize } from './scenes.ts'
 import { readLocal, writeLocal } from './storage.ts'
@@ -13,6 +15,7 @@ type Settings = { reactions: Reactions; glow: number; sensitivity: number; size:
 const SETTINGS_KEY = 'powder-rave-settings-v1'
 const DEFAULT_SETTINGS: Settings = { reactions: DEFAULT_REACTIONS, glow: 1, sensitivity: 1, size: 'medium' }
 const MAX_BRUSH = 30
+const CLIP_SECONDS = 10
 const STEP_MS = 1000 / 60
 
 const SLIDERS: { key: keyof Reactions | 'glow' | 'sensitivity'; label: string; hint: string; min: number; max: number }[] = [
@@ -54,6 +57,11 @@ export function App() {
   const [toast, setToast] = useState({ text: '', id: 0 })
   const [dragging, setDragging] = useState(false)
   const [drops, setDrops] = useState(0)
+  const [countdown, setCountdown] = useState<number | null>(null)
+  const [recording, setRecording] = useState(0)
+  const [armed, setArmed] = useState(false)
+  const [clip, setClip] = useState<Clip | null>(null)
+  const [mapped, setMapped] = useState<'none' | 'analysing' | 'ready'>('none')
 
   const stage = useRef<HTMLDivElement>(null)
   const layer = useRef<HTMLDivElement>(null)
@@ -67,11 +75,16 @@ export function App() {
 
   const [audio] = useState(() => new AudioEngine())
   const [detector] = useState(() => new BeatDetector())
+  const [recorder] = useState(() => new ClipRecorder())
+  const mapPlayer = useRef<MapPlayer | null>(null)
+  const mapToken = useRef(0)
+  const dropAt = useRef(-99)
+  const catching = useRef(false)
   const world = useRef<World>(null!)
   const draw = useRef<() => void>(() => {})
   const view = useRef<View>({ x: 0, y: 0, scale: 1 })
-  const live = useRef({ tool, brush, paused, settings, splash })
-  live.current = { tool, brush, paused, settings, splash }
+  const live = useRef({ tool, brush, paused, settings, splash, armed })
+  live.current = { tool, brush, paused, settings, splash, armed }
   const stroke = useRef<{ id: number; erase: boolean; last: { x: number; y: number } } | null>(null)
   const cursor = useRef<{ sx: number; sy: number } | null>(null)
 
@@ -109,6 +122,8 @@ export function App() {
   }
 
   function triggerDrop() {
+    dropAt.current = performance.now() / 1000
+    if (recorder.active && catching.current) { recorder.endIn(6); catching.current = false }
     world.current.drop(live.current.paused)
     setDrops(n => n + 1)
     const el = layer.current
@@ -125,39 +140,60 @@ export function App() {
     const root = document.documentElement
     const fx = overlay.current!.getContext('2d')!
     const sctx = spec.current!.getContext('2d')!
-    let frame = 0, acc = 0, prev = performance.now(), shownBpm = 0
+    let frame = 0, acc = 0, prev = performance.now(), shownBpm = 0, shownCount: number | null = null, shownRec = 0
+    recorder.onDone = c => { setClip(c); setRecording(0); catching.current = false }
 
     const loop = (now: number) => {
       const w = world.current
-      const { tool, brush, paused, settings, splash } = live.current
+      const { tool, brush, paused, settings, splash, armed } = live.current
       acc += Math.min(100, now - prev)
       prev = now
 
       const bands = audio.read()
-      const events = detector.update(bands, now / 1000)
+      const heard = detector.update(bands, now / 1000)
+      // A mapped song plays its beats from the map: exact timing, and we know when drops land.
+      const songTime = audio.fileTime(), map = songTime === null ? null : mapPlayer.current
+      const events = map ? map.update(songTime!) : heard
       w.setMidrange(bands.mid, settings.reactions)
       if (events.drop) triggerDrop()
       if (events.kick) w.onKick(events.kick, settings.reactions, paused)
       if (events.hat) w.onHat(events.hat, settings.reactions, paused)
-      if (detector.bpm !== shownBpm) { shownBpm = detector.bpm; setBpm(shownBpm) }
+      const nowBpm = map ? map.map.bpm : detector.bpm
+      if (nowBpm !== shownBpm) { shownBpm = nowBpm; setBpm(shownBpm) }
+      const until = map ? map.untilDrop(songTime!) : Infinity
+      const count = until <= 3.2 ? Math.ceil(until) : null
+      if (count !== shownCount) { shownCount = count; setCountdown(count) }
+
+      // Catch the drop: start filming during the build-up so the clip lands on the drop.
+      if (armed && !recorder.active) {
+        const stream = audio.recordStream()
+        if (map && until <= 5) { recorder.start(until + 6, stream); setArmed(false) }
+        else if (!map && heard.breakdown) { recorder.start(20, stream); catching.current = true; setArmed(false) }
+      }
 
       for (let n = 0; acc >= STEP_MS && n < 2; n++) {
         acc -= STEP_MS
         if (!paused) w.step()
         const s = stroke.current
-        if (s && !isSolidTool(tool)) w.paint(s.last.x, s.last.y, brush, tool, s.erase)
+        if (s && (s.erase || (!isSolidTool(tool) && !isClickTool(tool)))) w.paint(s.last.x, s.last.y, brush, tool, s.erase)
       }
       if (acc > STEP_MS) acc = 0
       w.decay()
 
-      const shake = w.pulse.shake
-      if (layer.current) layer.current.style.transform = `translate(${(Math.random() - .5) * shake}px,${(Math.random() - .5) * shake}px) scale(${1 + w.pulse.kick * .006})`
+      const shake = w.pulse.shake, sx = (Math.random() - .5) * shake, sy = (Math.random() - .5) * shake
+      if (layer.current) layer.current.style.transform = `translate(${sx}px,${sy}px) scale(${1 + w.pulse.kick * .006})`
       root.style.setProperty('--hue', (w.hue % 360).toFixed(1))
       root.style.setProperty('--pulse', w.pulse.kick.toFixed(3))
       root.style.setProperty('--glow', String(settings.glow))
 
       draw.current()
-      drawOverlay(fx, w, view.current, overlay.current!.width / innerWidth, splash ? null : cursor.current, brush, tool)
+      drawOverlay(fx, w, view.current, overlay.current!.width / innerWidth, splash || recorder.active ? null : cursor.current, brush, tool)
+      if (recorder.active) {
+        recorder.frame({ base: base.current!, glow: glow.current!, bloom: bloom.current!, overlay: overlay.current! }, w, view.current,
+          settings.glow, now / 1000 - dropAt.current, [sx, sy])
+        const left = Math.ceil(recorder.remaining())
+        if (left !== shownRec) { shownRec = left; setRecording(left) }
+      } else if (shownRec) { shownRec = 0; setRecording(0) }
 
       // spectrum strip
       const sw = sctx.canvas.width, sh = sctx.canvas.height, bars = 33
@@ -174,6 +210,8 @@ export function App() {
     }
     frame = requestAnimationFrame(loop)
     audio.onEnded = () => { setSource(null); say('Audio stopped. Pick another source.') }
+    // Development-only handle for automated play-testing.
+    if (import.meta.env.DEV) Object.assign(window, { __rave: { world: () => world.current, audio, recorder, step: (n: number) => { for (let k = 0; k < n; k++) world.current.step() }, draw: () => draw.current() } })
     return () => { cancelAnimationFrame(frame); removeEventListener('resize', layout); audio.stop() }
   }, [])
 
@@ -209,6 +247,7 @@ export function App() {
 
   async function pickSource(mode: SourceMode) {
     try {
+      if (mode !== 'file') { mapPlayer.current = null; setMapped('none'); mapToken.current++ }
       if (mode === 'demo') { audio.playDemo(); detector.reset() }
       else if (mode === 'file') { audioPicker.current?.click(); return }
       else if (mode === 'mic') { await audio.listenMic(); detector.reset(); say('Listening to your mic. Play something loud.') }
@@ -224,10 +263,55 @@ export function App() {
       await audio.playFile(file)
       detector.reset()
       setSource('file')
-      say(`Playing “${file.name}”`)
+      mapPlayer.current = null
+      setMapped('analysing')
+      say(`Playing “${file.name}”. Mapping the beats…`)
     } catch (error) {
       say(describe(error))
+      return
     }
+    const token = ++mapToken.current
+    try {
+      const map = await audio.analyse(file)
+      if (token !== mapToken.current || audio.mode !== 'file') return
+      mapPlayer.current = new MapPlayer(map)
+      setMapped('ready')
+      const drops = map.drops.length
+      say(`Mapped: ${map.bpm ? `${map.bpm} BPM, ` : ''}${drops} drop${drops === 1 ? '' : 's'} found`)
+    } catch {
+      if (token !== mapToken.current) return
+      setMapped('none')
+      say('Could not map this song, so it will react live instead.')
+    }
+  }
+
+  function record() {
+    if (!canRecord()) { say('Recording needs a recent Chrome, Edge, Firefox or Safari.'); return }
+    if (recorder.active) { recorder.stop(); return }
+    recorder.start(CLIP_SECONDS, audio.recordStream())
+    setRecording(CLIP_SECONDS)
+  }
+
+  function toggleCatch() {
+    if (!canRecord()) { say('Recording needs a recent Chrome, Edge, Firefox or Safari.'); return }
+    setArmed(a => {
+      if (!a) say(mapPlayer.current ? 'Armed. Recording starts 5 seconds before the next drop.' : 'Armed. Recording starts when the beat drops out for the build-up.')
+      return !a
+    })
+  }
+
+  function closeClip() {
+    if (clip) URL.revokeObjectURL(clip.url)
+    setClip(null)
+  }
+
+  async function shareClip() {
+    if (!clip) return
+    const file = new File([clip.blob], clip.name, { type: clip.type })
+    try {
+      if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], title: 'Powder Rave' })
+      else say('Sharing is not supported here. Use Download instead.')
+    } catch { /* cancelled */ }
   }
 
   function start() {
@@ -294,9 +378,14 @@ export function App() {
     e.currentTarget.setPointerCapture(e.pointerId)
     setMixOpen(false)
     const cell = toCell(e)
+    if (e.button === 0 && isClickTool(tool)) {
+      if (tool === BLAST) world.current.blast(cell.x, cell.y, blastRadius(brush), .8 + brush / 25, true)
+      else if (!world.current.placeBomb(cell.x, cell.y)) say('No room for a bomb there.')
+      return
+    }
     stroke.current = { id: e.pointerId, erase: e.button === 2, last: cell }
     cursor.current = { sx: e.clientX, sy: e.clientY }
-    world.current.paint(cell.x, cell.y, brush, tool, e.button === 2)
+    if (!isClickTool(tool) || e.button === 2) world.current.paint(cell.x, cell.y, brush, tool, e.button === 2)
   }
 
   function onPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
@@ -304,7 +393,7 @@ export function App() {
     const s = stroke.current
     if (!s || s.id !== e.pointerId) return
     const cell = toCell(e)
-    paintLine(s.last, cell, s.erase)
+    if (!isClickTool(tool) || s.erase) paintLine(s.last, cell, s.erase)
     s.last = cell
   }
 
@@ -361,7 +450,21 @@ export function App() {
             <canvas ref={spec} width={264} height={60} className="spec" />
             <i className="dot" />
             <div className="bpm">{bpm || '—'}<small>BPM</small></div>
+            {mapped !== 'none' && source === 'file' && (
+              <span className={`mapped ${mapped}`} title={mapped === 'ready' ? 'Beats come from a map of the whole song' : 'Mapping the song…'}>
+                {mapped === 'ready' ? 'MAPPED' : 'MAPPING…'}
+              </span>
+            )}
             <button className={`chip mixbtn ${mixOpen ? 'on' : ''}`} onClick={() => setMixOpen(o => !o)} aria-expanded={mixOpen}>Mix</button>
+          </div>
+          <div className="chips rec">
+            <button className={`chip recbtn ${recording ? 'live' : ''}`} onClick={record} title="Record a clip of the world with sound">
+              <i />{recording ? `Stop · ${recording}s` : `Clip ${CLIP_SECONDS}s`}
+            </button>
+            <button className={`chip ${armed ? 'armed' : ''}`} onClick={toggleCatch} disabled={!!recording}
+              title="Starts recording during the build-up so the clip lands on the drop">
+              {armed ? 'Waiting for the drop…' : 'Catch the drop'}
+            </button>
           </div>
           {mixOpen && (
             <section className="mix" aria-label="Mix and world settings">
@@ -416,6 +519,19 @@ export function App() {
 
       {activePad && !splash && <div className="hint" key={activePad.name}>{activePad.hint}</div>}
       {drops > 0 && <div className="drop-text" key={drops}>DROP</div>}
+      {countdown !== null && <div className="countdown" key={countdown}>DROP IN <b>{countdown}</b></div>}
+      {clip && (
+        <div className="clip" role="dialog" aria-label="Your clip">
+          <div className="clip-card">
+            <video src={clip.url} controls autoPlay loop playsInline />
+            <div className="clip-actions">
+              <a className="primary" href={clip.url} download={clip.name}>Download</a>
+              {'share' in navigator && <button onClick={shareClip}>Share</button>}
+              <button onClick={closeClip}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className={`toast ${toast.text ? 'show' : ''}`} role="status">{toast.text}</div>
       {dragging && <div className="dropzone">Drop it to play it</div>}
       {paused && !splash && <div className="frozen">FROZEN · music still playing</div>}

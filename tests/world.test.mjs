@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { World } from '../src/world.ts'
-import { M, ERASE } from '../src/materials.ts'
-import { buildScene, gridFor } from '../src/scenes.ts'
+import { M, ERASE, BOMB_FUSE, BOMB_DROP_ONLY } from '../src/materials.ts'
+import { buildScene, gridFor, SCENE_IDS } from '../src/scenes.ts'
 import { decodeWorld, encodeWorld } from '../src/save.ts'
 
 function seeded(seed = 1) {
@@ -137,12 +137,17 @@ test('the drop blooms plants and queues fireworks', () => {
   assert.equal(world.bursts.length, 0)
 })
 
-test('volcano erupts lava out of the crater on bass', () => {
-  const world = make(120, 80)
+test('volcano erupts lava out of the crater on bass and blows its top on the drop', () => {
+  const world = make(160, 100)
   buildScene(world, 'volcano')
-  world.erupt(1)
+  world.hooks.kick(world, 1)
   assert.ok(world.particles > 20)
   assert.ok([...world.pType.subarray(0, world.particles)].every(t => t === M.Lava))
+  const peakWalls = () => { let n = 0; for (let y = 0; y < world.craterY + 12; y++) for (let x = 60; x < 100; x++) if (world.at(x, y) === M.Wall) n++; return n }
+  const before = peakWalls()
+  world.drop()
+  assert.ok(peakWalls() < before * .6, `the summit is blasted away (${before} → ${peakWalls()})`)
+  assert.ok(world.count(M.Gravel) > 50, 'the summit becomes flying rubble')
 })
 
 test('painting respects walls and erasing clears', () => {
@@ -159,7 +164,7 @@ test('painting respects walls and erasing clears', () => {
 test('every scene builds at every grid size', () => {
   for (const size of ['small', 'medium', 'large']) {
     const { width, height } = gridFor(1440, 900, size)
-    for (const id of ['garden', 'volcano', 'blank']) {
+    for (const id of SCENE_IDS) {
       const world = new World(width, height, seeded(3))
       buildScene(world, id)
       assert.equal(world.scene, id)
@@ -184,4 +189,198 @@ test('save round-trips cells, colours and airborne particles', () => {
   assert.equal(copy.color[i], world.color[i])
   assert.throws(() => decodeWorld('{"format":"nope"}'), /not a Powder Rave world/)
   assert.throws(() => decodeWorld('not json'), /not a Powder Rave world/)
+})
+
+test('a blast smashes walls into gravel and throws everything clear of the crater', () => {
+  const world = make(80, 60)
+  floor(world)
+  for (let y = 30; y < 59; y++) for (let x = 0; x < 80; x++) world.set(x, y, y < 45 ? M.Sand : M.Wall)
+  const sand = world.count(M.Sand)
+  world.blast(40, 40, 10, 1.2, true)
+  assert.ok(world.count(M.Gravel) > 25, `walls turned to gravel (${world.count(M.Gravel)})`)
+  assert.equal(world.at(40, 40), M.Empty, 'the centre is cleared')
+  run(world, 600)
+  assert.equal(world.particles, 0)
+  assert.equal(world.count(M.Sand), sand, 'no sand created or lost')
+})
+
+test('blasts without smash leave walls alone', () => {
+  const world = make(40, 40)
+  for (let y = 20; y < 40; y++) for (let x = 0; x < 40; x++) world.set(x, y, M.Wall)
+  const walls = world.count(M.Wall)
+  world.blast(20, 22, 6, 1, false)
+  assert.equal(world.count(M.Wall), walls)
+})
+
+test('bombs count down one beat per kick, show urgency, then go off', () => {
+  const world = make(60, 40)
+  floor(world)
+  for (let y = 30; y < 39; y++) for (let x = 0; x < 60; x++) world.set(x, y, M.Wall)
+  world.placeBomb(30, 29)
+  assert.equal(world.life[world.index(30, 29)], BOMB_FUSE)
+  const react = { kick: 0, speakers: 0, sparks: 0, slosh: 0 }
+  for (let n = 0; n < BOMB_FUSE - 1; n++) world.onKick(1, react)
+  assert.equal(world.count(M.Bomb), 1)
+  assert.equal(world.life[world.index(30, 29)], 1)
+  world.onKick(1, react)
+  run(world, 3)
+  assert.equal(world.count(M.Bomb), 0)
+  assert.ok(world.count(M.Gravel) > 10, 'it cratered the floor')
+})
+
+test('drop-only bombs ignore kicks but go off on the drop, in a chain', () => {
+  const world = make(120, 40)
+  floor(world)
+  for (const x of [20, 40, 60, 80, 100]) world.set(x, 38, M.Bomb, BOMB_DROP_ONLY)
+  for (let n = 0; n < 20; n++) world.onKick(1, { kick: 0, speakers: 0, sparks: 0, slosh: 0 })
+  assert.equal(world.count(M.Bomb), 5)
+  world.drop()
+  run(world, 40)
+  assert.equal(world.count(M.Bomb), 0)
+})
+
+test('fire next to a bomb sets it off immediately', () => {
+  const world = make(40, 30)
+  floor(world)
+  world.set(20, 28, M.Bomb)
+  world.set(21, 28, M.Fire)
+  world.step()
+  assert.equal(world.count(M.Bomb), 0)
+})
+
+test('a gunpowder fuse burns from one end to the other', () => {
+  const world = make(120, 20)
+  floor(world)
+  for (let x = 5; x < 115; x++) world.set(x, 18, M.Gunpowder)
+  world.set(4, 18, M.Fire)
+  run(world, 200)
+  assert.ok(world.count(M.Gunpowder) < 5, `${world.count(M.Gunpowder)} grains left`)
+})
+
+test('brick towers collapse after their base is blasted', () => {
+  const world = make(60, 80)
+  floor(world)
+  for (let y = 20; y < 79; y++) for (let x = 25; x < 35; x++) world.set(x, y, M.Brick)
+  const bricks = world.count(M.Brick)
+  world.blast(30, 76, 7, 1.2, true)
+  run(world, 300)
+  assert.ok(world.count(M.Brick) < bricks * .25, `tower fell (${world.count(M.Brick)} of ${bricks} bricks standing)`)
+  let top = 79
+  for (let y = 0; y < 80; y++) if ([...Array(60).keys()].some(x => world.at(x, y) !== M.Empty)) { top = y; break }
+  assert.ok(top > 50, 'the rubble pile is far lower than the tower was')
+})
+
+test('brick with nothing under it stays put when there is no quake', () => {
+  const world = make(30, 30)
+  for (let x = 5; x < 25; x++) world.set(x, 10, M.Brick)
+  run(world, 100)
+  assert.equal(world.count(M.Brick), 20)
+})
+
+test('bubbles rise through water and become water again at the surface', () => {
+  const world = make(10, 30)
+  floor(world)
+  for (let y = 10; y < 29; y++) for (let x = 0; x < 10; x++) world.set(x, y, M.Water)
+  world.set(5, 27, M.Bubble)
+  const fluid = world.count(M.Water) + world.count(M.Bubble)
+  run(world, 5)
+  const at = world.type.findIndex(t => t === M.Bubble)
+  assert.ok(at >= 0 && (at / 10 | 0) < 27 && (at / 10 | 0) > 15, 'it rises steadily, not instantly')
+  run(world, 60)
+  assert.equal(world.count(M.Bubble), 0)
+  assert.equal(world.count(M.Water), fluid)
+})
+
+test('clouds rain on hi-hats and lightning strikes from them', () => {
+  const world = make(80, 60)
+  floor(world)
+  for (let y = 5; y < 10; y++) for (let x = 20; x < 60; x++) world.set(x, y, M.Cloud)
+  world.onHat(1)
+  assert.ok(world.particles > 5, 'raindrops falling')
+  assert.ok([...world.pType.subarray(0, world.particles)].includes(M.Water))
+  assert.equal(world.strike(), true)
+  assert.equal(world.bolts.length, 1)
+  assert.ok(world.bolts[0].points.length > 3)
+})
+
+test('moon gravity keeps thrown dust in the air much longer', () => {
+  const airtime = scene => {
+    const world = make(60, 300)
+    buildScene(world, 'blank')
+    if (scene === 'moon') world.rules = { ...world.rules, gravity: .28 }
+    world.addParticle(30, 250, 0, -3, M.Sand, 0, 0)
+    let t = 0
+    while (world.particles && t < 2000) { world.step(); t++ }
+    return t
+  }
+  assert.ok(airtime('moon') > airtime('earth') * 1.6)
+})
+
+test('under the sea, speakers throw sand through water without losing either', () => {
+  const world = make(80, 60)
+  buildScene(world, 'sea')
+  const total = () => world.count(M.Sand) + world.count(M.Water) + world.count(M.Bubble)
+  for (let i = 0; i < world.size; i++) if (world.type[i] === M.Lava) world.type[i] = M.Wall
+  const before = total()
+  world.speakerKick(1)
+  assert.ok(world.particles > 10, 'sand launched into the water')
+  run(world, 900)
+  assert.equal(world.particles, 0)
+  assert.ok(Math.abs(total() - before) <= 2, `conserved (${before} → ${total()})`)
+})
+
+test('kelp grows through water in the deep sea', () => {
+  const world = make(40, 60)
+  buildScene(world, 'sea')
+  const plants = world.count(M.Plant)
+  for (let n = 0; n < 10; n++) world.growPlants(false)
+  assert.ok(world.count(M.Plant) > plants + 10)
+})
+
+test('city windows flicker on hi-hats and the drop demolishes the skyline', () => {
+  const world = make(200, 120)
+  buildScene(world, 'city')
+  const colors = world.color.slice()
+  world.hooks.hat(world, 1)
+  assert.ok(world.color.some((c, i) => c !== colors[i]), 'windows changed')
+  const bricks = world.count(M.Brick)
+  world.drop()
+  run(world, 500)
+  assert.ok(world.count(M.Brick) < bricks * .7, `${world.count(M.Brick)} of ${bricks} bricks standing`)
+})
+
+test('the blast tool and bombs only act where there is room', () => {
+  const world = make(30, 30)
+  floor(world)
+  world.set(10, 10, M.Wall)
+  assert.equal(world.placeBomb(10, 10), false)
+  assert.equal(world.placeBomb(12, 10), true)
+  assert.equal(world.placeBomb(-1, 10), false)
+})
+
+test('saves keep the scene rules and vents', () => {
+  const world = make(80, 60)
+  buildScene(world, 'sea')
+  const copy = decodeWorld(encodeWorld(world))
+  assert.equal(copy.scene, 'sea')
+  assert.equal(copy.rules.throughWater, true)
+  assert.equal(copy.marks.length, world.marks.length)
+  assert.ok(typeof copy.hooks.kick === 'function')
+})
+
+test('a lit bomb holds still so its fuse always finds it', () => {
+  const world = make(30, 40)
+  floor(world)
+  world.set(15, 5, M.Bomb)
+  world.schedule(world.index(15, 5), 20)
+  run(world, 15)
+  assert.equal(world.at(15, 5), M.Bomb, 'it did not fall')
+  run(world, 10)
+  assert.equal(world.count(M.Bomb), 0, 'and it went off')
+})
+
+test('moon speakers sit on the ground, not in the sky', () => {
+  const world = make(300, 180)
+  buildScene(world, 'moon')
+  for (const e of world.speakers()) assert.ok(e.y > world.height * .6, `speaker at y=${e.y | 0}`)
 })

@@ -1,6 +1,7 @@
 /** Band levels in 0..1 from one analyser frame. */
 export type Bands = { bass: number; mid: number; treble: number }
-export type BeatEvents = { kick: number; hat: number; drop: boolean }
+/** `breakdown` fires once when a steady beat goes quiet for 1.7 s: a drop may be coming. */
+export type BeatEvents = { kick: number; hat: number; drop: boolean; breakdown: boolean }
 
 /** Hz ranges for each band. Bass is kept tight so bass synths don't read as kicks. */
 export const BAND_HZ = { bass: [30, 95], mid: [300, 2000], treble: [5000, 13000] } as const
@@ -29,11 +30,13 @@ export class BeatDetector {
   private lastHat = -Infinity
   private lastDrop = -Infinity
   private intervals: number[] = []
+  private quiet = false
 
   reset() {
     this.prevBass = this.prevTreble = this.bassFlux = this.trebleFlux = 0
     this.lastKick = this.lastHat = this.lastDrop = -Infinity
     this.intervals = []
+    this.quiet = false
   }
 
   /** Median kick spacing as BPM, once a steady beat has been heard. */
@@ -47,7 +50,7 @@ export class BeatDetector {
   get grooving() { return this.intervals.length >= 4 }
 
   update({ bass, treble }: Bands, time: number): BeatEvents {
-    const out: BeatEvents = { kick: 0, hat: 0, drop: false }
+    const out: BeatEvents = { kick: 0, hat: 0, drop: false, breakdown: false }
     const k = this.sensitivity
     const riseBass = Math.max(0, bass - this.prevBass), riseTreble = Math.max(0, treble - this.prevTreble)
     this.bassFlux = this.bassFlux * .9 + riseBass * .1
@@ -66,7 +69,12 @@ export class BeatDetector {
         if (this.intervals.length > 10) this.intervals.shift()
       }
       this.lastKick = time
+      this.quiet = false
       out.kick = Math.min(1, Math.max(.3, (bass - .25) * 1.6))
+    }
+    if (!out.kick && !this.quiet && this.grooving && time - this.lastKick > 1.7) {
+      this.quiet = true
+      out.breakdown = true
     }
     if (riseTreble > Math.max(.03 / k, this.trebleFlux * 2.6) && treble > .08 / k && time - this.lastHat > .09) {
       this.lastHat = time

@@ -1,3 +1,4 @@
+import { analyzeSamples, mono, type BeatMap } from './analysis.ts'
 import { bandLevels, type Bands } from './detector.ts'
 import { startDemo } from './demoTrack.ts'
 
@@ -13,6 +14,9 @@ export class AudioEngine {
   private analyser: AnalyserNode | null = null
   private master: GainNode | null = null
   private noise: AudioBuffer | null = null
+  /** Everything audible, as a stream clips can record. */
+  private tap: MediaStreamAudioDestinationNode | null = null
+  private element: HTMLAudioElement | null = null
   readonly spectrum = new Uint8Array(1024)
   private stopCurrent: (() => void) | null = null
   onEnded: (() => void) | null = null
@@ -31,10 +35,12 @@ export class AudioEngine {
       master.connect(comp)
       comp.connect(analyser)
       comp.connect(ctx.destination)
+      const tap = ctx.createMediaStreamDestination()
+      comp.connect(tap)
       const noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate)
       const data = noise.getChannelData(0)
       for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1
-      Object.assign(this, { ctx, analyser, master, noise })
+      Object.assign(this, { ctx, analyser, master, noise, tap })
     }
     if (this.ctx!.state === 'suspended') void this.ctx!.resume()
     return { ctx: this.ctx!, analyser: this.analyser!, master: this.master! }
@@ -68,9 +74,27 @@ export class AudioEngine {
       throw new Error('That file could not be played. Try an MP3 or WAV.')
     }
     this.stop()
-    this.stopCurrent = () => { el.pause(); node.disconnect(); URL.revokeObjectURL(url) }
+    this.element = el
+    this.stopCurrent = () => { el.pause(); node.disconnect(); URL.revokeObjectURL(url); this.element = null }
     this.mode = 'file'
   }
+
+  /** Decodes a file and maps its kicks, hats and drops ahead of time. */
+  async analyse(file: File): Promise<BeatMap> {
+    const { ctx } = this.ensure()
+    const buffer = await ctx.decodeAudioData(await file.arrayBuffer())
+    await new Promise(r => setTimeout(r, 0))
+    return analyzeSamples(mono(buffer), buffer.sampleRate)
+  }
+
+  /** Where the playing file is, in seconds, corrected for output delay. Null when no file plays. */
+  fileTime() {
+    if (this.mode !== 'file' || !this.element || !this.ctx) return null
+    return this.element.currentTime - (this.ctx.outputLatency || this.ctx.baseLatency || 0)
+  }
+
+  /** The app's audio as a stream for recording (null before audio starts). */
+  recordStream() { return this.tap?.stream ?? null }
 
   async listenMic() {
     const { ctx, analyser } = this.ensure()
@@ -103,6 +127,7 @@ export class AudioEngine {
     this.stop()
     const node = ctx.createMediaStreamSource(stream)
     node.connect(analyser)
+    if (mode === 'tab' && this.tap) node.connect(this.tap)
     const ended = () => { if (this.mode === mode) { this.stop(); this.onEnded?.() } }
     stream.getAudioTracks()[0].addEventListener('ended', ended)
     this.stopCurrent = () => { node.disconnect(); stream.getTracks().forEach(track => track.stop()) }

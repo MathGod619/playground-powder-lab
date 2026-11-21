@@ -60,3 +60,11 @@ test('band levels read the right bins', () => {
   assert.equal(bands.mid, 0)
   assert.equal(bands.treble, 0)
 })
+
+test('a breakdown is announced once, before the drop', () => {
+  const detector = new BeatDetector()
+  feed(detector, 6)
+  const quiet = feed(detector, 4, { kicks: false, start: 6 })
+  assert.equal(quiet.filter(e => e.breakdown).length, 1)
+  assert.ok(quiet.find(e => e.breakdown).time < 8.2)
+})

@@ -1,11 +1,11 @@
 import { HOPPER, M } from './materials.ts'
+import { attachScene, SCENE_IDS } from './scenes.ts'
 import { World, type SceneId } from './world.ts'
 
 export const SAVE_KEY = 'powder-rave-save-v1'
 export const MAX_FILE_BYTES = 16_000_000
 const FORMAT = 'powder-rave'
 const VERSION = 1
-const SCENES: SceneId[] = ['garden', 'volcano', 'blank']
 
 function toBase64(bytes: Uint8Array) {
   let s = ''
@@ -39,6 +39,7 @@ export function encodeWorld(world: World) {
     height: world.height,
     scene: world.scene,
     craterY: world.craterY,
+    marks: world.marks,
     hue: world.hue,
     type: toBase64(type),
     life: toBase64(life),
@@ -64,8 +65,11 @@ export function decodeWorld(json: string) {
   world.type.set(type)
   world.life.set(life)
   new Uint8Array(world.color.buffer).set(color)
-  world.scene = SCENES.includes(data.scene as SceneId) ? data.scene as SceneId : 'blank'
+  attachScene(world, SCENE_IDS.includes(data.scene as SceneId) ? data.scene as SceneId : 'blank')
   world.craterY = Number(data.craterY) || 0
+  if (Array.isArray(data.marks)) {
+    world.marks = data.marks.slice(0, 64).filter(m => Number.isFinite(m?.x) && Number.isFinite(m?.y)).map(m => ({ x: +m.x, y: +m.y }))
+  }
   world.hue = Number(data.hue) || 300
   return world
 }

@@ -17,18 +17,45 @@ A full-screen falling-sand world that hears your music. Kicks make the ground ju
 | **Kick** (30–95 Hz) | The exposed top layer of every pile (sand, glitter, water, oil, lava) is thrown into the air and lands again. Speakers blast nearby loose cells outward with a shockwave ring. Seeds grow one step. The volcano erupts. The screen shakes and the colours shift. |
 | **Hi-hats** (5–13 kHz) | Embers fly off fire and lava. Glitter twinkles. |
 | **Midrange** (300 Hz–2 kHz) | Water and smoke slosh, switching direction every bar. |
-| **The drop** | A hard kick after at least 1.7 s with no kick (once a steady beat has been heard). Flash, chromatic glitch, every speaker fires, every plant blooms, and fireworks go up. Press **D** or the DROP button to force one. |
+| **The drop** | A hard kick after at least 1.7 s with no kick (once a steady beat has been heard). Flash, chromatic glitch, every speaker fires, every plant blooms, every bomb goes off in a chain, lightning strikes from any clouds, and fireworks go up. Press **D** or the DROP button to force one. |
+
+### Songs you upload are mapped first
+
+When you play a file, Powder Rave decodes the whole song and maps its kicks, hi-hats, tempo and drops before reacting (the **MAPPED** badge). Beats then fire exactly on time instead of a moment late, and a **DROP IN 3 · 2 · 1** countdown appears before each drop. Demo, mic and tab audio still react live.
 
 ## Materials
 
 Sand, Water, Wall, Fire, Oil, Lava, **Glitter** (takes the current beat colour, so painting in rhythm leaves rainbow layers), **Seed** (grows on the beat, flowers on the drop), **Speaker** and **Rocket** (launches and bursts into sparks and glitter). Lava and water make obsidian and steam. Fire burns oil and plants.
 
+Things that blow up:
+
+- **Bomb** (B): one per click. Counts down 8 beats (the number floats above it), then explodes. Fire, lava or the drop set it off early, and bombs caught in a blast chain-react.
+- **Powder** (G): gunpowder. Lay a trail and light it for a fuse that crackles along.
+- **Blast** (X): click anywhere to blow it up. Brush size sets the radius.
+- **Brick** (C): build with it. Explosions shake the ground, and any brick left with nothing under it crumbles into falling gravel, so towers really collapse.
+- **Cloud** (V): rains on hi-hats and throws lightning on the drop (and on very hard kicks).
+
+Explosions smash walls, brick and speakers into gravel and throw everything else clear of the crater.
+
 ## Controls
 
 - Paint by dragging. Right-click erases.
-- **1–0** pick materials, **E** erase, **[ ]** or scroll wheel change brush size.
+- **1–0** pick materials, **C** brick, **G** powder, **B** bomb, **V** cloud, **X** blast, **E** erase, **[ ]** or scroll wheel change brush size.
 - **Space** freezes the world while the music keeps playing. **R** resets the scene. **D** forces a drop.
+- **Clip 10s** records the world with sound. **Catch the drop** arms a recording that starts during the build-up (or 5 s before a mapped drop) and ends 6 s after the drop, so the clip is built around the drop. When it's done you can watch it, download it (MP4 where the browser supports it, otherwise WebM), or share it.
 - **Mix** has sliders for each reaction, glow and beat sensitivity (raise it for a quiet mic), the world detail level (Chunky / Normal / Fine), and Save / Load / Export / Import.
+
+## Worlds
+
+| World | What's different |
+| --- | --- |
+| **Bass Garden** | Dunes with glitter layers, a pool, speakers and seeds. |
+| **Volcano** | Bass spits lava from the crater. The drop blows the top off the mountain. |
+| **Demolition** | A brick skyline wired with charges. Windows flicker on the hi-hats; the drop brings every tower down. |
+| **Moon** | About a quarter of normal gravity. Every kick launches dust into slow, floating arcs, and the lander has a surprise in the tank. |
+| **Deep Sea** | Thrown material moves *through* water with drag, so speakers blow sand clouds across the seabed. Vents breathe bubbles on the kick, plankton glows on the hi-hats, and kelp grows to the beat. |
+| **Storm** | Clouds rain on the hi-hats. On the drop, lightning hunts the forest and sets it alight. |
+| **Blank** | A floor and two speakers. |
 
 ## Audio sources
 
@@ -41,9 +68,11 @@ Audio never leaves the browser.
 
 ## Code map
 
-- `src/world.ts`: the grid, free (airborne) particles, cell rules and every music reaction.
-- `src/scenes.ts`: Bass Garden, Volcano, Blank, and the grid-size presets.
-- `src/detector.ts`: band levels, kick/hat onset detection, BPM and drop detection.
+- `src/world.ts`: the grid, free (airborne) particles, cell rules, explosions and every music reaction.
+- `src/scenes.ts`: the seven worlds, each with its own build, physics rules and beat hooks, plus the grid-size presets.
+- `src/detector.ts`: live band levels, kick/hat onset detection, BPM, breakdown and drop detection.
+- `src/analysis.ts`: offline song mapping (kicks, hats, tempo, drops) and the map player.
+- `src/recorder.ts`: clip recording, which recomposes the glow (CSS can't be captured) and adds a watermark.
 - `src/demoTrack.ts`: the synthesised demo loop.
 - `src/audio.ts`: audio sources and the analyser.
 - `src/render.ts`: pixel and glow layers, shockwave rings and the brush cursor.

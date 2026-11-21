@@ -39,6 +39,12 @@ export function colorFor(type: number, hue: number, rng: Rng) {
     case M.Rocket: return pack(255, 240, 214)
     case M.Flower: return hsl(hue + rng() * 50, 100, 68)
     case M.Smoke: return pack(170, 165, 190)
+    case M.Gunpowder: return hsl(270, 6, 18 + rng() * 12)
+    case M.Bomb: return pack(200, 20, 50)
+    case M.Gravel: return hsl(250, 8, 34 + rng() * 14)
+    case M.Bubble: return pack(215, 248, 255, 235)
+    case M.Brick: return hsl(12 + rng() * 10, 48, 30 + rng() * 12)
+    case M.Cloud: return hsl(225, 18, 78 + rng() * 12, 225)
   }
   return 0
 }
