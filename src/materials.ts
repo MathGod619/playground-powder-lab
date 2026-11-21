@@ -1,26 +1,62 @@
-export const Material = {
+export const M = {
   Empty: 0,
   Sand: 1,
   Water: 2,
-  Fire: 3,
-  Stone: 4,
+  Wall: 3,
+  Fire: 4,
   Oil: 5,
   Lava: 6,
   Smoke: 7,
-  Electricity: 8,
+  Glitter: 8,
+  Plant: 9,
+  Speaker: 10,
+  Rocket: 11,
+  Flower: 12,
+  /** Only ever a free particle: a short-lived glowing ember. */
+  Spark: 99,
 } as const
 
-export type Material = typeof Material[keyof typeof Material]
-export const MATERIALS = [
-  { id: Material.Sand, name: 'Sand', color: '#efc479', behavior: 'Falls, piles up, and sinks through liquids.' },
-  { id: Material.Water, name: 'Water', color: '#57c4ff', behavior: 'Flows, quenches fire, and conducts sparks.' },
-  { id: Material.Fire, name: 'Fire', color: '#ff7752', behavior: 'Rises, ignites oil, and burns out into smoke.' },
-  { id: Material.Stone, name: 'Stone', color: '#a2afbd', behavior: 'Holds its shape. Draw walls and ledges.' },
-  { id: Material.Oil, name: 'Oil', color: '#c095ed', behavior: 'Floats on water. Ignites near heat or sparks.' },
-  { id: Material.Lava, name: 'Lava', color: '#f89a50', behavior: 'Flows slowly and hardens on contact with water.' },
-  { id: Material.Smoke, name: 'Smoke', color: '#a39fb6', behavior: 'Drifts upward and disperses.' },
-  { id: Material.Electricity, name: 'Electricity', color: '#e5fa80', behavior: 'Sends short sparks through water and ignites oil.' },
-] as const
+export type Material = typeof M[keyof typeof M]
+export const ERASE = 200
+export type Tool = Material | typeof ERASE
 
-export const MAX_LIFE = [0, 0, 0, 90, 0, 0, 0, 220, 12] as const
-export const MAX_CHARGE = 30
+const table = (entries: [number, number][], fill = 0) => {
+  const out = new Int8Array(256).fill(fill)
+  for (const [k, v] of entries) out[k] = v
+  return out
+}
+
+/** Heavier things sink through lighter fluids. */
+export const DENSITY = table([
+  [M.Empty, -3], [M.Smoke, -2], [M.Fire, -1], [M.Oil, 2], [M.Water, 3], [M.Glitter, 4], [M.Sand, 5], [M.Lava, 6],
+])
+/** Cells other materials can move into (by density). */
+export const FLUID = table([M.Empty, M.Smoke, M.Fire, M.Oil, M.Water, M.Lava].map(t => [t, 1]))
+/** Cells the beat can throw into the air. */
+export const HOPPER = table([M.Sand, M.Glitter, M.Water, M.Oil, M.Lava].map(t => [t, 1]))
+/** Cells that bloom on the glow layer. */
+export const GLOWS = table([M.Fire, M.Lava, M.Glitter, M.Flower, M.Rocket, M.Spark].map(t => [t, 1]))
+
+export type Pad = { tool: Tool; name: string; key: string; swatch: string; hint: string }
+
+export const PADS: Pad[] = [
+  { tool: M.Sand, name: 'Sand', key: '1', swatch: 'linear-gradient(135deg,#f6d38f,#d9a24f)', hint: 'Piles up. Jumps on every kick.' },
+  { tool: M.Water, name: 'Water', key: '2', swatch: 'linear-gradient(135deg,#6fd2ff,#1f7fd6)', hint: 'Flows and sloshes with the midrange.' },
+  { tool: M.Wall, name: 'Wall', key: '3', swatch: 'linear-gradient(135deg,#5a5670,#2f2c3d)', hint: 'Solid. Nothing moves it.' },
+  { tool: M.Fire, name: 'Fire', key: '4', swatch: 'linear-gradient(135deg,#ffe066,#ff3d1f)', hint: 'Burns oil and plants. Sparks on hi-hats.' },
+  { tool: M.Oil, name: 'Oil', key: '5', swatch: 'linear-gradient(135deg,#9a6bc4,#4b2a6b)', hint: 'Floats on water. Very flammable.' },
+  { tool: M.Lava, name: 'Lava', key: '6', swatch: 'linear-gradient(135deg,#ffb347,#ff3300)', hint: 'Turns water to steam and itself to obsidian.' },
+  { tool: M.Glitter, name: 'Glitter', key: '7', swatch: 'conic-gradient(from 0deg,#ff2bd6,#ffd22b,#2bffb1,#2bb8ff,#a02bff,#ff2bd6)', hint: 'Takes the current beat colour. Twinkles on treble.' },
+  { tool: M.Plant, name: 'Seed', key: '8', swatch: 'linear-gradient(135deg,#8dff6b,#1f9a4a)', hint: 'Grows one step per beat and flowers on the drop.' },
+  { tool: M.Speaker, name: 'Speaker', key: '9', swatch: 'radial-gradient(circle,#ff2bd6 0 22%,#16131f 24% 46%,#3b3650 48% 60%,#16131f 62%)', hint: 'Blasts everything nearby on each kick.' },
+  { tool: M.Rocket, name: 'Rocket', key: '0', swatch: 'radial-gradient(circle at 50% 35%,#fff 0 18%,#ffcf4a 20% 34%,#ff2bd6 36% 52%,#3a1046 54%)', hint: 'Launches and bursts into sparks and glitter.' },
+  { tool: ERASE, name: 'Erase', key: 'E', swatch: 'repeating-linear-gradient(45deg,#2a2536 0 5px,#3a3449 5px 10px)', hint: 'Clears cells. Right-click also erases.' },
+]
+
+/** Fraction of brush cells filled per dab, so powders pour instead of stamping. */
+export const BRUSH_DENSITY: Record<number, number> = {
+  [M.Sand]: .4, [M.Water]: .55, [M.Wall]: 1, [M.Fire]: .5, [M.Oil]: .55, [M.Lava]: .55,
+  [M.Glitter]: .4, [M.Plant]: 1, [M.Speaker]: 1, [M.Rocket]: .02,
+}
+/** Solid tools are stamped once; others keep pouring while held. */
+export const isSolidTool = (tool: Tool) => tool === M.Wall || tool === M.Speaker

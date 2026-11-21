@@ -1,133 +1,101 @@
-import type { Camera } from './camera.ts'
-import { WORLDS } from './worlds.ts'
-import type { Settings } from './beat.ts'
-import type { Sandbox } from './engine.ts'
-import { Material as M } from './materials.ts'
+import { FIRE_PALETTE, half, hsl } from './color.ts'
+import { ERASE, GLOWS, M, type Tool } from './materials.ts'
+import type { World } from './world.ts'
 
-type RGB = readonly [number, number, number]
-const palette: RGB[][] = [
-  [],
-  [[190, 133, 66], [219, 164, 92], [238, 187, 111], [248, 211, 148]],
-  [[28, 105, 167], [32, 130, 192], [42, 157, 211], [77, 185, 230]],
-  [[202, 54, 40], [249, 85, 51], [255, 138, 55], [255, 205, 96]],
-  [[39, 49, 57], [49, 61, 69], [59, 71, 79], [76, 89, 94]],
-  [[103, 68, 144], [137, 89, 177], [163, 112, 204], [190, 143, 228]],
-  [[189, 65, 36], [228, 92, 32], [244, 119, 42], [252, 162, 66]],
-  [[59, 57, 76], [70, 67, 83], [82, 76, 94], [97, 88, 106]],
-  [[171, 205, 77], [211, 238, 107], [232, 249, 146], [249, 255, 195]],
-]
-const chargeColor: RGB = [187, 248, 209]
+export type View = { x: number; y: number; scale: number }
+export type Cursor = { sx: number; sy: number } | null
 
-export function createRenderer(canvas: HTMLCanvasElement, halo: HTMLCanvasElement) {
-  const ctx = canvas.getContext('2d', { alpha: false })
-  const glow = halo.getContext('2d')
-  if (!ctx || !glow) throw new Error('Canvas 2D is unavailable.')
-  const { width, height } = canvas
-  const image = ctx.createImageData(width, height)
-  const glowImage = glow.createImageData(width, height)
-  const size = width * height
-  const texture = new Uint8Array(size)
-  const background = new Uint8Array(size)
-  for (let i = 0; i < size; i++) {
-    const x = i % width
-    const y = Math.floor(i / width)
-    const hash = Math.imul(i ^ 0xa591, 0x45d9f3b)
-    texture[i] = (hash ^ (hash >>> 16)) & 15
-    const vignette = Math.abs(x - width / 2) / width
-    background[i] = Math.max(0, Math.round(5 - vignette * 6 + y / height * 3))
-  }
-  ctx.imageSmoothingEnabled = false
-  let lastWorld: Sandbox | null = null
-  let lastRevision = -1
-  let lastSettings: Settings | null = null
-  let lastCamera: Camera | null = null
-  const viewColumns = new Int32Array(width)
-  const viewRows = new Int32Array(height)
+/**
+ * Draws the grid into a pixelated canvas plus a glow canvas that only holds emissive cells.
+ * The page blurs the glow canvases with CSS and screens them on top, which reads as bloom.
+ */
+export function createRenderer(world: World, base: HTMLCanvasElement, glow: HTMLCanvasElement, bloom: HTMLCanvasElement) {
+  const { width: W, height: H, size: N } = world
+  base.width = glow.width = W
+  base.height = glow.height = H
+  bloom.width = Math.max(1, W >> 1)
+  bloom.height = Math.max(1, H >> 1)
+  const ctx = base.getContext('2d')!, gctx = glow.getContext('2d')!, bctx = bloom.getContext('2d')!
+  const image = ctx.createImageData(W, H), pix = new Uint32Array(image.data.buffer)
+  const glowImage = gctx.createImageData(W, H), gpix = new Uint32Array(glowImage.data.buffer)
 
-  return (world: Sandbox, settings: Settings, camera: Camera) => {
-    if (world === lastWorld && world.revision === lastRevision && lastCamera === camera && lastSettings &&
-        settings.glow === lastSettings.glow && settings.grid === lastSettings.grid && settings.fx === lastSettings.fx) return
-    lastWorld = world
-    lastRevision = world.revision
-    lastSettings = settings
-    lastCamera = camera
-    const { x: offsetX, y: offsetY, zoom } = camera
-    const theme = WORLDS.find(scene => scene.id === world.template)?.sky ?? [12, 17, 23]
-    for (let x = 0; x < width; x++) viewColumns[x] = Math.min(world.width - 1, Math.floor(offsetX + x / zoom))
-    for (let y = 0; y < height; y++) viewRows[y] = Math.min(world.height - 1, Math.floor(offsetY + y / zoom))
-    const data = image.data
-    const light = glowImage.data
-    if (settings.glow) light.fill(0)
-    for (let y = 0; y < height; y++) {
-      const worldY = viewRows[y]
-      const gridStep = zoom < .75 ? 32 : 16
-      const gridY = settings.grid && (worldY % gridStep < Math.max(1, Math.round(1 / zoom)))
-      for (let x = 0; x < width; x++) {
-        const i = y * width + x
-        const offset = i * 4
-        const worldX = viewColumns[x]
-        const index = worldY * world.width + worldX
-        const id = world.cells[index]
-        const shade = texture[index % size]
-        let color: RGB
-        let rim = 0
-        if (id === M.Empty) {
-          const grid = gridY || (settings.grid && (worldX % gridStep < Math.max(1, Math.round(1 / zoom)))) ? 5 : 0
-          const d = background[i] + grid + Number(shade === 0)
-          data[offset] = theme[0] + d
-          data[offset + 1] = theme[1] + d
-          data[offset + 2] = theme[2] + d
-        } else {
-          const level = shade >= 15 ? 3 : shade >= 11 ? 2 : shade >= 5 ? 1 : 0
-          color = world.charge[index] > 14 ? chargeColor : palette[id][level]
-          if (worldY > 0 && world.cells[index - world.width] === M.Empty) {
-            rim = id === M.Water || id === M.Lava ? 28 : id === M.Stone ? 14 : 6
-          }
-          data[offset] = color[0] + rim
-          data[offset + 1] = color[1] + rim
-          data[offset + 2] = color[2] + rim
-          if (settings.glow && (id === M.Fire || id === M.Lava || id === M.Electricity ||
-              world.charge[index] > 14 || (id === M.Water && rim > 0))) {
-            light[offset] = data[offset]
-            light[offset + 1] = data[offset + 1]
-            light[offset + 2] = data[offset + 2]
-            light[offset + 3] = id === M.Electricity ? 215 : 130
-          }
-        }
-        data[offset + 3] = 255
+  return function draw() {
+    const { type, color, life, pulse } = world
+    gpix.fill(0)
+    const twinkle = pulse.twinkle > .05, speaker = pulse.speaker
+    const speakerColor = hsl(world.hue, 100, 62), surf = hsl(195, 100, 70 + pulse.kick * 15)
+    const frameHash = Math.imul(world.frame, 2654435761)
+    for (let i = 0; i < N; i++) {
+      const t = type[i]
+      if (t === M.Empty) { pix[i] = 0; continue }
+      let c = color[i]
+      switch (t) {
+        case M.Fire: c = FIRE_PALETTE[life[i]]; gpix[i] = c; break
+        case M.Smoke: c = ((c & 0xffffff) | ((Math.min(1, life[i] / 140) * 150 | 0) << 24)) >>> 0; break
+        case M.Lava: case M.Flower: case M.Rocket: gpix[i] = c; break
+        case M.Glitter:
+          if (twinkle && ((Math.imul(i, 2246822519) ^ frameHash) >>> 0) % 61 === 0) { c = 0xffffffff; gpix[i] = c }
+          else gpix[i] = half(c)
+          break
+        case M.Speaker:
+          if (speaker > .05 && (c & 0xff) > 30) { c = speakerColor; gpix[i] = c }
+          else if (speaker > .05 && ((i % W + (i / W | 0)) & 1) === 0) gpix[i] = half(speakerColor)
+          break
+        case M.Water: if (i >= W && type[i - W] === M.Empty) { c = surf; gpix[i] = half(half(c)) } break
+        case M.Plant: if (life[i] > 0) { c = 0xff70ff70; gpix[i] = half(c) } break
+      }
+      pix[i] = c
+    }
+    for (let k = 0; k < world.particles; k++) {
+      const x = world.px[k] | 0, y = world.py[k] | 0
+      if (x < 0 || x >= W || y < 0 || y >= H) continue
+      const i = y * W + x, t = world.pType[k], c = world.pColor[k]
+      if (t === M.Spark) {
+        const a = Math.min(1, world.pLife[k] / 25)
+        pix[i] = a < 1 ? ((c & 0xffffff) | ((a * 255 | 0) << 24)) >>> 0 : c
+        gpix[i] = c
+      } else {
+        pix[i] = c
+        if (GLOWS[t]) gpix[i] = c
       }
     }
     ctx.putImageData(image, 0, 0)
-    if (settings.glow) glow.putImageData(glowImage, 0, 0)
+    gctx.putImageData(glowImage, 0, 0)
+    bctx.clearRect(0, 0, bloom.width, bloom.height)
+    bctx.drawImage(glow, 0, 0, bloom.width, bloom.height)
+  }
+}
 
-    if (settings.fx && world.wave && world.wave.radius > 0) {
-      const { x, y, radius, strength } = world.wave
-      const alpha = (1 - radius / (world.width * 0.6)) * strength
-      const centerX = (x - offsetX) * zoom
-      const centerY = (y - offsetY) * zoom
-      ctx.strokeStyle = `rgba(198, 226, 242, ${alpha * 0.58})`
-      ctx.lineWidth = 0.65
-      ctx.setLineDash([2, 3])
-      ctx.beginPath()
-      ctx.arc(centerX, centerY, radius * zoom, 0, Math.PI * 2)
-      ctx.stroke()
-      ctx.setLineDash([])
-      ctx.strokeStyle = `rgba(121, 178, 206, ${alpha * 0.15})`
-      ctx.beginPath()
-      ctx.arc(centerX, centerY, (radius + 3) * zoom, 0, Math.PI * 2)
-      ctx.stroke()
-    }
-    if (settings.fx && world.wind) {
-      const { direction, strength, ticks } = world.wind
-      const ocean = world.template === 'ocean'
-      ctx.fillStyle = `rgba(135, 212, 215, ${strength * ticks / 74})`
-      for (let n = 0; n < 32; n++) {
-        const y = (n * 41 + 13) % (ocean ? height : height - 30)
-        const progress = world.tickNumber * direction * (ocean && viewRows[y] > world.height * .63 ? -3 : 3)
-        const x = (((n * 211 + progress) % width) + width) % width
-        const cell = world.cells[viewRows[y] * world.width + viewColumns[x]]
-        if (cell === M.Empty || (ocean && cell === M.Water)) ctx.fillRect(x, y, 4 + n % 6, 1)
-      }
-    }
+/** Screen-space overlay: shockwave rings, the brush cursor and the drop flash. */
+export function drawOverlay(ctx: CanvasRenderingContext2D, world: World, view: View, dpr: number, cursor: Cursor, brush: number, tool: Tool) {
+  const s = view.scale * dpr, ox = view.x * dpr, oy = view.y * dpr
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+  for (let k = world.rings.length - 1; k >= 0; k--) {
+    const ring = world.rings[k]
+    ring.r += (ring.max - ring.r) * .12 + .6
+    const a = 1 - ring.r / ring.max
+    if (a <= 0) { world.rings.splice(k, 1); continue }
+    const X = ox + ring.x * s, Y = oy + ring.y * s, R = ring.r * s
+    ctx.strokeStyle = `hsla(${ring.hue},100%,65%,${a * .25})`
+    ctx.lineWidth = R * .25
+    ctx.beginPath(); ctx.arc(X, Y, R, 0, 7); ctx.stroke()
+    ctx.strokeStyle = `hsla(${ring.hue},100%,80%,${a * .9})`
+    ctx.lineWidth = ring.width * dpr
+    ctx.beginPath(); ctx.arc(X, Y, R, 0, 7); ctx.stroke()
+  }
+  if (cursor) {
+    const X = cursor.sx * dpr, Y = cursor.sy * dpr, R = Math.max(3, brush * view.scale) * dpr
+    ctx.lineWidth = 1.5 * dpr
+    ctx.strokeStyle = tool === ERASE ? 'rgba(255,255,255,.8)' : `hsla(${world.hue % 360},100%,75%,.9)`
+    ctx.setLineDash(tool === ERASE ? [4 * dpr, 4 * dpr] : [])
+    ctx.beginPath(); ctx.arc(X, Y, R, 0, 7); ctx.stroke()
+    ctx.setLineDash([])
+    ctx.fillStyle = 'rgba(255,255,255,.9)'
+    ctx.fillRect(X - dpr, Y - dpr, 2 * dpr, 2 * dpr)
+  }
+  if (world.pulse.flash > .01) {
+    ctx.fillStyle = `rgba(255,240,255,${world.pulse.flash * .55})`
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
   }
 }

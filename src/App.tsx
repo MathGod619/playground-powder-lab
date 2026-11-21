@@ -1,639 +1,441 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import type { ChangeEvent, CSSProperties, KeyboardEvent, PointerEvent } from 'react'
-import {
-  Activity, AudioLines, CircleHelp, Download, Eraser, FolderOpen, Grid2X2, Hand, Maximize2, Minimize2,
-  Layers3, Minus, Pause, Play, Plus, RotateCcw, Save, Sparkles, Upload, Waves, Wind, Zap, ZoomIn, ZoomOut,
-} from 'lucide-react'
-import { advanceBeat, applyAudioHits, bands, defaultSettings, MAX_BPM, MIN_BPM, newClock, type Band, type Settings } from './beat.ts'
-import { AudioInput } from './audio.ts'
-import { AudioSource, SOURCE_LABEL } from './AudioSource.tsx'
-import { clampCamera, fitCamera, zoomAt, type Camera } from './camera.ts'
-import { WorldLibrary } from './WorldLibrary.tsx'
-import { makeWorld, WORLD_SIZES, WORLDS, type WorldId } from './worlds.ts'
-import { DRAFT_KEY, readLocal, writeLocal } from './storage.ts'
-import { HEIGHT, HZ, Sandbox, WIDTH, type Point } from './engine.ts'
-import { Material as M, MATERIALS, type Material } from './materials.ts'
-import { createRenderer } from './render.ts'
-import { decodeSession, encodeSession, LOCAL_KEY, MAX_BRUSH, MAX_FILE_BYTES } from './session.ts'
+import { useEffect, useRef, useState } from 'react'
+import type { ChangeEvent, CSSProperties, DragEvent, PointerEvent as ReactPointerEvent } from 'react'
+import { AudioEngine, type SourceMode } from './audio.ts'
+import { BeatDetector } from './detector.ts'
+import { isSolidTool, M, PADS, type Tool } from './materials.ts'
+import { createRenderer, drawOverlay, type View } from './render.ts'
+import { decodeWorld, encodeWorld, MAX_FILE_BYTES, SAVE_KEY } from './save.ts'
+import { buildScene, gridFor, SCENES, WORLD_SIZES, type WorldSize } from './scenes.ts'
+import { readLocal, writeLocal } from './storage.ts'
+import { DEFAULT_REACTIONS, World, type Reactions, type SceneId } from './world.ts'
 
-const STEP_MS = 1000 / HZ
-const BAND_LABELS = {
-  bass: { name: 'Bass', effect: 'Shockwave', color: '#e9ba73', Icon: Waves },
-  mid: { name: 'Midrange', effect: 'Wind', color: '#78cae0', Icon: Wind },
-  treble: { name: 'Treble', effect: 'Sparks', color: '#c1a5ed', Icon: Zap },
+type Settings = { reactions: Reactions; glow: number; sensitivity: number; size: WorldSize }
+const SETTINGS_KEY = 'powder-rave-settings-v1'
+const DEFAULT_SETTINGS: Settings = { reactions: DEFAULT_REACTIONS, glow: 1, sensitivity: 1, size: 'medium' }
+const MAX_BRUSH = 30
+const STEP_MS = 1000 / 60
+
+const SLIDERS: { key: keyof Reactions | 'glow' | 'sensitivity'; label: string; hint: string; min: number; max: number }[] = [
+  { key: 'kick', label: 'Kick jump', hint: 'How high piles jump on each kick', min: 0, max: 2 },
+  { key: 'speakers', label: 'Speaker blast', hint: 'How far speakers throw things', min: 0, max: 2 },
+  { key: 'sparks', label: 'Sparks', hint: 'Embers on hi-hats', min: 0, max: 2 },
+  { key: 'slosh', label: 'Slosh', hint: 'Midrange pushes water and smoke', min: 0, max: 2 },
+  { key: 'glow', label: 'Glow', hint: 'Bloom strength', min: 0, max: 2 },
+  { key: 'sensitivity', label: 'Beat sensitivity', hint: 'Raise this for quiet sources like a mic', min: .5, max: 2 },
+]
+
+function loadSettings(): Settings {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? 'null')
+    if (saved) return { ...DEFAULT_SETTINGS, ...saved, reactions: { ...DEFAULT_REACTIONS, ...saved.reactions } }
+  } catch { /* storage unavailable */ }
+  return DEFAULT_SETTINGS
 }
-const describeError = (error: unknown) => error instanceof Error ? error.message : 'Something went wrong.'
-const rangeStyle = (percent: number, color?: string) =>
-  ({ '--progress': `${percent}%`, '--range-color': color }) as CSSProperties
 
-function freshStart() {
-  const { width, height } = WORLD_SIZES[1]
-  const world = new Sandbox(width, height)
-  makeWorld(world, 'volcano')
-  return { world, clock: newClock(), settings: defaultSettings, camera: fitCamera(world) }
+function makeWorld(size: WorldSize, scene: SceneId) {
+  const { width, height } = gridFor(innerWidth, innerHeight, size)
+  const world = new World(width, height)
+  buildScene(world, scene)
+  return world
 }
 
-type Stroke = { pointerId: number; button: number; point: Point | null }
+const describe = (error: unknown) => error instanceof Error ? error.message : 'Something went wrong.'
 
 export function App() {
-  const [initial] = useState(freshStart)
-  const [audio] = useState(() => new AudioInput())
-  const source = useSyncExternalStore(audio.subscribe, audio.snapshot)
-  const [settings, setSettings] = useState(initial.settings)
-  const controls = useRef(settings)
-  const world = useRef(initial.world)
-  const clock = useRef(initial.clock)
-  const camera = useRef(initial.camera)
-  const [scale, setScale] = useState(initial.camera.zoom)
-  const [scene, setScene] = useState({ id: initial.world.template, width: initial.world.width, height: initial.world.height })
-  const [library, setLibrary] = useState(false)
-  const [panning, setPanning] = useState(false)
-  const [fullscreen, setFullscreen] = useState(false)
-  const [overlay, setOverlay] = useState(false)
-  const chamber = useRef<HTMLElement>(null)
-  const pan = useRef<{ pointerId: number; start: Point; view: Camera } | null>(null)
-  const interacted = useRef(false)
-  const [stats, setStats] = useState({ count: world.current.occupied, beat: clock.current.beat, regions: 0 })
-  const [notice, setNotice] = useState({ text: '', error: false })
-  const [help, setHelp] = useState(false)
-  const [canvasError, setCanvasError] = useState('')
-  const canvas = useRef<HTMLCanvasElement>(null)
-  const halo = useRef<HTMLCanvasElement>(null)
-  const cursor = useRef<HTMLDivElement>(null)
-  const filePicker = useRef<HTMLInputElement>(null)
-  const stroke = useRef<Stroke | null>(null)
-  const hover = useRef<Point | null>(null)
-  const importId = useRef(0)
-  const dialog = useRef<HTMLDialogElement>(null)
+  const [settings, setSettings] = useState(loadSettings)
+  const [splash, setSplash] = useState(true)
+  const [tool, setTool] = useState<Tool>(M.Sand)
+  const [brush, setBrush] = useState(6)
+  const [paused, setPaused] = useState(false)
+  const [scene, setScene] = useState<SceneId>('garden')
+  const [source, setSource] = useState<SourceMode | null>(null)
+  const [bpm, setBpm] = useState(0)
+  const [mixOpen, setMixOpen] = useState(false)
+  const [toast, setToast] = useState({ text: '', id: 0 })
+  const [dragging, setDragging] = useState(false)
+  const [drops, setDrops] = useState(0)
 
-  function change(next: Settings) {
-    interacted.current = true
-    controls.current = next
-    setSettings(next)
+  const stage = useRef<HTMLDivElement>(null)
+  const layer = useRef<HTMLDivElement>(null)
+  const base = useRef<HTMLCanvasElement>(null)
+  const glow = useRef<HTMLCanvasElement>(null)
+  const bloom = useRef<HTMLCanvasElement>(null)
+  const overlay = useRef<HTMLCanvasElement>(null)
+  const spec = useRef<HTMLCanvasElement>(null)
+  const audioPicker = useRef<HTMLInputElement>(null)
+  const worldPicker = useRef<HTMLInputElement>(null)
+
+  const [audio] = useState(() => new AudioEngine())
+  const [detector] = useState(() => new BeatDetector())
+  const world = useRef<World>(null!)
+  const draw = useRef<() => void>(() => {})
+  const view = useRef<View>({ x: 0, y: 0, scale: 1 })
+  const live = useRef({ tool, brush, paused, settings, splash })
+  live.current = { tool, brush, paused, settings, splash }
+  const stroke = useRef<{ id: number; erase: boolean; last: { x: number; y: number } } | null>(null)
+  const cursor = useRef<{ sx: number; sy: number } | null>(null)
+
+  const say = (text: string) => setToast(t => ({ text, id: t.id + 1 }))
+
+  useEffect(() => {
+    if (!toast.text) return
+    const timer = setTimeout(() => setToast(t => ({ ...t, text: '' })), 2800)
+    return () => clearTimeout(timer)
+  }, [toast.id])
+
+  useEffect(() => {
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)) } catch { /* storage unavailable */ }
+    detector.sensitivity = settings.sensitivity
+  }, [settings])
+
+  function layout() {
+    const w = world.current
+    if (!w || !layer.current || !overlay.current) return
+    const scale = Math.max(innerWidth / w.width, innerHeight / w.height)
+    view.current = { scale, x: (innerWidth - w.width * scale) / 2, y: (innerHeight - w.height * scale) / 2 }
+    Object.assign(layer.current.style, {
+      width: `${w.width * scale}px`, height: `${w.height * scale}px`, left: `${view.current.x}px`, top: `${view.current.y}px`,
+    })
+    const dpr = Math.min(2, devicePixelRatio || 1)
+    overlay.current.width = innerWidth * dpr
+    overlay.current.height = innerHeight * dpr
   }
 
-  function patch(update: Partial<Settings>) {
-    change({ ...controls.current, ...update })
+  function install(next: World) {
+    world.current = next
+    draw.current = createRenderer(next, base.current!, glow.current!, bloom.current!)
+    setScene(next.scene)
+    layout()
   }
 
-  function patchBand(band: Band, update: Partial<Settings['bands'][Band]>) {
-    const reactions = controls.current.bands
-    patch({ bands: { ...reactions, [band]: { ...reactions[band], ...update } } })
-    if (update.enabled === false || update.sensitivity === 0) {
-      const active = world.current
-      if (band === 'bass' && active.wave) {
-        active.wave = null
-        active.revision++
-      }
-      if (band === 'mid' && active.wind) {
-        active.wind = null
-        active.revision++
-      }
+  function triggerDrop() {
+    world.current.drop(live.current.paused)
+    setDrops(n => n + 1)
+    const el = layer.current
+    if (el) {
+      el.classList.add('chroma')
+      setTimeout(() => el.classList.remove('chroma'), 450)
     }
   }
 
-  function changeBpm(bpm: number) {
-    patch({ bpm: Math.min(MAX_BPM, Math.max(MIN_BPM, Math.round(bpm))) })
-  }
+  // Simulation + render loop
+  useEffect(() => {
+    install(makeWorld(live.current.settings.size, 'garden'))
+    addEventListener('resize', layout)
+    const root = document.documentElement
+    const fx = overlay.current!.getContext('2d')!
+    const sctx = spec.current!.getContext('2d')!
+    let frame = 0, acc = 0, prev = performance.now(), shownBpm = 0
 
-  function toggleReactions() {
-    const enabled = !controls.current.enabled
-    if (!enabled) {
-      world.current.wave = null
-      world.current.wind = null
-      world.current.revision++
+    const loop = (now: number) => {
+      const w = world.current
+      const { tool, brush, paused, settings, splash } = live.current
+      acc += Math.min(100, now - prev)
+      prev = now
+
+      const bands = audio.read()
+      const events = detector.update(bands, now / 1000)
+      w.setMidrange(bands.mid, settings.reactions)
+      if (events.drop) triggerDrop()
+      if (events.kick) w.onKick(events.kick, settings.reactions, paused)
+      if (events.hat) w.onHat(events.hat, settings.reactions, paused)
+      if (detector.bpm !== shownBpm) { shownBpm = detector.bpm; setBpm(shownBpm) }
+
+      for (let n = 0; acc >= STEP_MS && n < 2; n++) {
+        acc -= STEP_MS
+        if (!paused) w.step()
+        const s = stroke.current
+        if (s && !isSolidTool(tool)) w.paint(s.last.x, s.last.y, brush, tool, s.erase)
+      }
+      if (acc > STEP_MS) acc = 0
+      w.decay()
+
+      const shake = w.pulse.shake
+      if (layer.current) layer.current.style.transform = `translate(${(Math.random() - .5) * shake}px,${(Math.random() - .5) * shake}px) scale(${1 + w.pulse.kick * .006})`
+      root.style.setProperty('--hue', (w.hue % 360).toFixed(1))
+      root.style.setProperty('--pulse', w.pulse.kick.toFixed(3))
+      root.style.setProperty('--glow', String(settings.glow))
+
+      draw.current()
+      drawOverlay(fx, w, view.current, overlay.current!.width / innerWidth, splash ? null : cursor.current, brush, tool)
+
+      // spectrum strip
+      const sw = sctx.canvas.width, sh = sctx.canvas.height, bars = 33
+      sctx.clearRect(0, 0, sw, sh)
+      for (let k = 0; k < bars; k++) {
+        const a = (k / bars) ** 2 * 400 + 1 | 0, b = Math.max(a + 1, ((k + 1) / bars) ** 2 * 400 + 2 | 0)
+        let sum = 0
+        for (let i = a; i < b; i++) sum += audio.spectrum[i]
+        const v = sum / (b - a) / 255, bh = Math.max(2, v * sh)
+        sctx.fillStyle = `hsl(${w.hue + k * 6},100%,${55 + v * 25}%)`
+        sctx.fillRect(k * sw / bars + 1, sh - bh, sw / bars - 3, bh)
+      }
+      frame = requestAnimationFrame(loop)
     }
-    patch({ enabled })
+    frame = requestAnimationFrame(loop)
+    audio.onEnded = () => { setSource(null); say('Audio stopped. Pick another source.') }
+    return () => { cancelAnimationFrame(frame); removeEventListener('resize', layout); audio.stop() }
+  }, [])
+
+  // Keyboard
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (live.current.splash || e.metaKey || e.ctrlKey || e.altKey) return
+      if ((e.target as HTMLElement)?.closest?.('input')) return
+      const key = e.key.toLowerCase()
+      const pad = PADS.find(p => p.key.toLowerCase() === key)
+      if (pad) setTool(pad.tool)
+      else if (key === '[' || key === '-') setBrush(b => Math.max(1, b - 1))
+      else if (key === ']' || key === '=') setBrush(b => Math.min(MAX_BRUSH, b + 1))
+      else if (key === ' ') { e.preventDefault(); setPaused(p => !p) }
+      else if (key === 'd') triggerDrop()
+      else if (key === 'r') loadScene(world.current.scene)
+      else if (key === 'escape') setMixOpen(false)
+    }
+    addEventListener('keydown', onKey)
+    return () => removeEventListener('keydown', onKey)
+  }, [])
+
+  // ---------------------------------------------------------------- actions
+
+  function loadScene(id: SceneId) {
+    install(makeWorld(live.current.settings.size, id))
   }
 
-  function show(text: string, error = false) { setNotice({ text, error }) }
-
-  function restore(data: ReturnType<typeof decodeSession>) {
-    stroke.current = null
-    pan.current = null
-    world.current = data.world
-    clock.current = data.clock
-    change(data.settings)
-    setView(data.camera)
-    setScene({ id: data.world.template, width: data.world.width, height: data.world.height })
-    setStats({ count: data.world.occupied, beat: data.clock.beat, regions: 0 })
+  function changeSize(size: WorldSize) {
+    setSettings(s => ({ ...s, size }))
+    install(makeWorld(size, world.current.scene))
   }
 
-  function loadWorld(id: WorldId, width: number, height: number) {
-    importId.current++
-    const next = new Sandbox(width, height)
-    makeWorld(next, id)
-    restore({ world: next, clock: newClock(), settings: controls.current, camera: fitCamera(next) })
-    setLibrary(false)
+  async function pickSource(mode: SourceMode) {
+    try {
+      if (mode === 'demo') { audio.playDemo(); detector.reset() }
+      else if (mode === 'file') { audioPicker.current?.click(); return }
+      else if (mode === 'mic') { await audio.listenMic(); detector.reset(); say('Listening to your mic. Play something loud.') }
+      else { await audio.listenTab(); detector.reset(); say('Hooked into tab audio. Play Spotify or YouTube in that tab.') }
+      setSource(audio.mode)
+    } catch (error) {
+      say(describe(error))
+    }
   }
 
-  function snapshot() {
-    return encodeSession(world.current, clock.current, controls.current, camera.current)
+  async function playFile(file: File) {
+    try {
+      await audio.playFile(file)
+      detector.reset()
+      setSource('file')
+      say(`Playing “${file.name}”`)
+    } catch (error) {
+      say(describe(error))
+    }
+  }
+
+  function start() {
+    setSplash(false)
+    audio.playDemo()
+    detector.reset()
+    setSource('demo')
+    setTimeout(() => say('Paint with the dock. Right-click erases. Wait for the drop.'), 600)
   }
 
   async function save() {
     try {
-      await writeLocal(LOCAL_KEY, snapshot())
-      show('Checkpoint saved in this browser.')
-    } catch {
-      show('Could not save in this browser. Use Export to keep a copy.', true)
-    }
+      await writeLocal(SAVE_KEY, encodeWorld(world.current))
+      say('World saved in this browser.')
+    } catch (error) { say(describe(error)) }
   }
 
   async function load() {
-    interacted.current = true
-    const id = ++importId.current
     try {
-      const saved = await readLocal(LOCAL_KEY)
-      if (id !== importId.current) return
-      if (!saved) {
-        show('No checkpoint yet. Use Save to create one.', true)
-        return
-      }
-      restore(decodeSession(saved))
-      show('Checkpoint loaded.')
-    } catch (error) {
-      if (id === importId.current) show(describeError(error), true)
-    }
+      const data = await readLocal(SAVE_KEY)
+      if (!data) { say('Nothing saved yet.'); return }
+      install(decodeWorld(data))
+      say('Saved world loaded.')
+    } catch (error) { say(describe(error)) }
   }
 
-  function download() {
-    const contents = snapshot()
-    const url = URL.createObjectURL(new Blob([contents], { type: 'application/json' }))
-    const link = document.createElement('a')
-    link.href = url
-    link.download = 'playground-powder-session.json'
-    link.click()
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-    show('Session exported.')
+  function exportWorld() {
+    const blob = new Blob([encodeWorld(world.current)], { type: 'application/json' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `powder-rave-${world.current.scene}.json`
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000)
   }
 
-  async function importFile(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]
-    event.target.value = ''
+  async function importWorld(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
     if (!file) return
-    interacted.current = true
-    const id = ++importId.current
     try {
-      if (file.size > MAX_FILE_BYTES) throw new Error('Session file is too large.')
-      const data = decodeSession(await file.text())
-      if (id !== importId.current) return
-      restore(data)
-      show('Session imported.')
-    } catch (error) {
-      if (id === importId.current) show(describeError(error), true)
+      if (file.size > MAX_FILE_BYTES) throw new Error('That file is too large.')
+      install(decodeWorld(await file.text()))
+      say(`Loaded ${file.name}`)
+    } catch (error) { say(describe(error)) }
+  }
+
+  // ---------------------------------------------------------------- painting
+
+  const toCell = (e: { clientX: number; clientY: number }) => ({
+    x: Math.floor((e.clientX - view.current.x) / view.current.scale),
+    y: Math.floor((e.clientY - view.current.y) / view.current.scale),
+  })
+
+  function paintLine(from: { x: number; y: number }, to: { x: number; y: number }, erase: boolean) {
+    const d = Math.max(Math.abs(to.x - from.x), Math.abs(to.y - from.y))
+    const steps = Math.max(1, d / Math.max(1, brush * .5) | 0)
+    for (let k = 0; k <= steps; k++) {
+      world.current.paint(Math.round(from.x + (to.x - from.x) * k / steps), Math.round(from.y + (to.y - from.y) * k / steps), brush, tool, erase)
     }
   }
 
-  useEffect(() => {
-    if (!canvas.current || !halo.current) return
-    let render: ReturnType<typeof createRenderer>
-    try {
-      render = createRenderer(canvas.current, halo.current)
-    } catch (error) {
-      setCanvasError(describeError(error))
-      return
-    }
-    let animation = 0
-    let previous = 0
-    let accumulated = 0
-    let lastStats = 0
-    let lastBeat = clock.current.beat
-    let previousSource = audio.snapshot()
-    let windDirection: -1 | 1 = 1
-    const frame = (now: number) => {
-      const state = controls.current
-      const active = world.current
-      const activeSource = audio.snapshot()
-      if (activeSource.mode !== previousSource.mode ||
-          (previousSource.status === 'live' && activeSource.status !== 'live')) {
-        active.wave = null
-        active.wind = null
-        active.revision++
-      }
-      previousSource = activeSource
-      const hits = document.hidden ? null : audio.read(now)
-      if (hits && !state.paused && state.enabled) {
-        applyAudioHits(state, active, hits, windDirection)
-        if (hits.mid && state.bands.mid.enabled) windDirection = windDirection === 1 ? -1 : 1
-      }
-      const elapsed = Math.min(now - (previous || now), STEP_MS * 4)
-      previous = now
-      if (state.paused || document.hidden) {
-        accumulated = 0
-      } else {
-        if (activeSource.mode === 'simulator') advanceBeat(clock.current, state, active, elapsed / STEP_MS)
-        accumulated += elapsed
-        const frameStart = performance.now()
-        for (let step = 0; accumulated >= STEP_MS && step < 4; step++) {
-          if (step > 0 && performance.now() - frameStart > 11) {
-            accumulated %= STEP_MS
-            break
-          }
-          accumulated -= STEP_MS
-          const painting = stroke.current
-          if (painting?.point) {
-            active.stamp(painting.point, state.brush, painting.button === 2 ? M.Empty : state.material as Material)
-          }
-          active.step()
-        }
-      }
-      render(active, state, camera.current)
-      if (now - lastStats >= 250 || clock.current.beat !== lastBeat) {
-        lastStats = now
-        lastBeat = clock.current.beat
-        setStats(old => old.count === active.occupied && old.beat === lastBeat && old.regions === active.runningRegions
-          ? old : { count: active.occupied, beat: lastBeat, regions: active.runningRegions })
-      }
-      animation = requestAnimationFrame(frame)
-    }
-    animation = requestAnimationFrame(frame)
-    const releaseAudio = () => audio.stop()
-    window.addEventListener('pagehide', releaseAudio)
-    return () => {
-      cancelAnimationFrame(animation)
-      window.removeEventListener('pagehide', releaseAudio)
-      audio.dispose()
-    }
-  }, [audio])
-
-  useEffect(() => {
-    let alive = true
-    let ready = false
-    let lastSaved = ''
-    void readLocal(DRAFT_KEY).then(saved => {
-      if (saved && alive && !interacted.current) restore(decodeSession(saved))
-    }).catch(() => {}).finally(() => { ready = true })
-    const saveDraft = () => {
-      if (!ready) return
-      const data = snapshot()
-      if (data === lastSaved) return
-      lastSaved = data
-      void writeLocal(DRAFT_KEY, data).catch(() => {
-        if (lastSaved === data) lastSaved = ''
-      })
-    }
-    const persistWhenHidden = () => { if (document.hidden) saveDraft() }
-    const interval = window.setInterval(saveDraft, 10000)
-    window.addEventListener('pagehide', saveDraft)
-    document.addEventListener('visibilitychange', persistWhenHidden)
-    return () => {
-      alive = false
-      window.clearInterval(interval)
-      window.removeEventListener('pagehide', saveDraft)
-      document.removeEventListener('visibilitychange', persistWhenHidden)
-    }
-  }, [])
-
-  useEffect(() => {
-    const element = canvas.current
-    if (!element) return
-    const wheel = (event: WheelEvent) => {
-      event.preventDefault()
-      if (!stroke.current) {
-        const point = screenPoint(event.clientX, event.clientY, element)
-        const next = camera.current.zoom * Math.exp(-Math.max(-100, Math.min(100, event.deltaY)) * .003)
-        setView(zoomAt(world.current, camera.current, next, point))
-      }
-    }
-    const updateFullscreen = () => setFullscreen(document.fullscreenElement === chamber.current)
-    element.addEventListener('wheel', wheel, { passive: false })
-    document.addEventListener('fullscreenchange', updateFullscreen)
-    return () => {
-      element.removeEventListener('wheel', wheel)
-      document.removeEventListener('fullscreenchange', updateFullscreen)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!overlay) return
-    const key = (event: globalThis.KeyboardEvent) => { if (event.key === 'Escape') setOverlay(false) }
-    document.addEventListener('keydown', key)
-    return () => document.removeEventListener('keydown', key)
-  }, [overlay])
-
-  useEffect(() => {
-    if (!notice.text) return
-    const timeout = window.setTimeout(() => setNotice({ text: '', error: false }), notice.error ? 6500 : 3600)
-    return () => window.clearTimeout(timeout)
-  }, [notice])
-
-  useEffect(() => {
-    const handleKey = (event: globalThis.KeyboardEvent) => {
-      if (event.defaultPrevented || (event.target instanceof HTMLElement && event.target.closest('button, input, a, dialog'))) return
-      if (event.altKey || event.ctrlKey || event.metaKey || event.repeat) return
-      if (/^[1-8]$/.test(event.key)) patch({ material: Number(event.key) })
-      else if (event.key.toLowerCase() === 'e') patch({ material: M.Empty })
-      else if (event.code === 'Space') {
-        event.preventDefault()
-        patch({ paused: !controls.current.paused })
-      } else if (event.key === '[' || event.key === ']') {
-        patch({ brush: Math.max(1, Math.min(MAX_BRUSH, controls.current.brush + (event.key === ']' ? 1 : -1))) })
-      }
-    }
-    window.addEventListener('keydown', handleKey)
-    return () => window.removeEventListener('keydown', handleKey)
-  }, [])
-
-  useEffect(() => {
-    if (help && !dialog.current?.open) dialog.current?.showModal()
-    if (!help && dialog.current?.open) dialog.current.close()
-  }, [help])
-
-  function setView(next: Camera) {
-    interacted.current = true
-    camera.current = next
-    showCursor(null)
-    setScale(next.zoom)
+  function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    if (splash || (e.button !== 0 && e.button !== 2)) return
+    e.currentTarget.setPointerCapture(e.pointerId)
+    setMixOpen(false)
+    const cell = toCell(e)
+    stroke.current = { id: e.pointerId, erase: e.button === 2, last: cell }
+    cursor.current = { sx: e.clientX, sy: e.clientY }
+    world.current.paint(cell.x, cell.y, brush, tool, e.button === 2)
   }
 
-  function changeZoom(ratio: number) {
-    setView(zoomAt(world.current, camera.current, camera.current.zoom * ratio, { x: WIDTH / 2, y: HEIGHT / 2 }))
+  function onPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
+    cursor.current = { sx: e.clientX, sy: e.clientY }
+    const s = stroke.current
+    if (!s || s.id !== e.pointerId) return
+    const cell = toCell(e)
+    paintLine(s.last, cell, s.erase)
+    s.last = cell
   }
 
-  async function toggleFullscreen() {
-    if (overlay) { setOverlay(false); return }
-    if (document.fullscreenElement === chamber.current && document.fullscreenElement) {
-      await document.exitFullscreen()
-      return
-    }
-    try {
-      if (!chamber.current?.requestFullscreen) throw new Error()
-      await chamber.current.requestFullscreen()
-    } catch { setOverlay(true) }
+  function endStroke(e: ReactPointerEvent<HTMLDivElement>) {
+    if (stroke.current?.id === e.pointerId) stroke.current = null
+    if (e.pointerType !== 'mouse') cursor.current = null
   }
 
-  function showCursor(point: Point | null) {
-    hover.current = point
-    const element = cursor.current
-    if (!element) return
-    element.hidden = !point
-    if (point) {
-      const view = camera.current
-      element.style.left = `${(point.x + 0.5 - view.x) * view.zoom / WIDTH * 100}%`
-      element.style.top = `${(point.y + 0.5 - view.y) * view.zoom / HEIGHT * 100}%`
-    }
+  function onDrop(e: DragEvent) {
+    e.preventDefault()
+    setDragging(false)
+    const file = [...e.dataTransfer.files].find(f => f.type.startsWith('audio'))
+    if (!file) { say('Drop an audio file to play it.'); return }
+    setSplash(false)
+    void playFile(file)
   }
 
-  function screenPoint(clientX: number, clientY: number, element: HTMLCanvasElement): Point {
-    const rect = element.getBoundingClientRect()
-    return { x: (clientX - rect.left) / rect.width * WIDTH, y: (clientY - rect.top) / rect.height * HEIGHT }
-  }
-
-  function getPoint(event: PointerEvent<HTMLCanvasElement>, clamp = false): Point | null {
-    const at = screenPoint(event.clientX, event.clientY, event.currentTarget)
-    if (!clamp && (at.x < 0 || at.y < 0 || at.x >= WIDTH || at.y >= HEIGHT)) return null
-    const view = camera.current
-    const x = Math.floor(view.x + Math.max(0, Math.min(WIDTH - .001, at.x)) / view.zoom)
-    const y = Math.floor(view.y + Math.max(0, Math.min(HEIGHT - .001, at.y)) / view.zoom)
-    return { x, y }
-  }
-
-  function startStroke(event: PointerEvent<HTMLCanvasElement>) {
-    if (stroke.current || pan.current || (event.button !== 0 && event.button !== 1 && event.button !== 2)) return
-    event.preventDefault()
-    interacted.current = true
-    event.currentTarget.setPointerCapture(event.pointerId)
-    if (event.button === 1 || (event.button === 0 && panning)) {
-      pan.current = { pointerId: event.pointerId, start: screenPoint(event.clientX, event.clientY, event.currentTarget), view: camera.current }
-      showCursor(null)
-      return
-    }
-    const point = getPoint(event, true)!
-    const button = event.ctrlKey ? 2 : event.button
-    stroke.current = { pointerId: event.pointerId, button, point }
-    world.current.stamp(point, controls.current.brush, button === 2 ? M.Empty : controls.current.material as Material)
-    showCursor(point)
-  }
-
-  function moveStroke(event: PointerEvent<HTMLCanvasElement>) {
-    const drag = pan.current
-    if (drag?.pointerId === event.pointerId) {
-      const now = screenPoint(event.clientX, event.clientY, event.currentTarget)
-      setView(clampCamera(world.current, {
-        x: drag.view.x + (drag.start.x - now.x) / drag.view.zoom,
-        y: drag.view.y + (drag.start.y - now.y) / drag.view.zoom,
-        zoom: drag.view.zoom,
-      }))
-      return
-    }
-    const point = getPoint(event)
-    showCursor(panning ? null : point)
-    const active = stroke.current
-    if (!active || active.pointerId !== event.pointerId) return
-    const end = point ?? (active.point ? getPoint(event, true) : null)
-    const state = controls.current
-    if (end) world.current.stroke(active.point ?? end, end, state.brush, active.button === 2 ? M.Empty : state.material as Material)
-    active.point = point
-  }
-
-  function endStroke(event: PointerEvent<HTMLCanvasElement>) {
-    if (stroke.current?.pointerId === event.pointerId) stroke.current = null
-    if (pan.current?.pointerId === event.pointerId) pan.current = null
-    if (event.pointerType !== 'mouse') showCursor(null)
-  }
-
-  function canvasKeys(event: KeyboardEvent<HTMLCanvasElement>) {
-    const view = camera.current
-    const point = hover.current ?? { x: Math.floor(view.x + WIDTH / 2 / view.zoom), y: Math.floor(view.y + HEIGHT / 2 / view.zoom) }
-    const step = event.shiftKey ? 1 : Math.max(4, Math.round(4 / view.zoom))
-    switch (event.key) {
-      case 'ArrowLeft': point.x = Math.max(Math.ceil(view.x), point.x - step); break
-      case 'ArrowRight': point.x = Math.min(Math.floor(view.x + (WIDTH - 1) / view.zoom), point.x + step); break
-      case 'ArrowUp': point.y = Math.max(Math.ceil(view.y), point.y - step); break
-      case 'ArrowDown': point.y = Math.min(Math.floor(view.y + (HEIGHT - 1) / view.zoom), point.y + step); break
-      case 'Enter': interacted.current = true; world.current.stamp(point, settings.brush, settings.material as Material); break
-      case ' ': if (!event.repeat) patch({ paused: !controls.current.paused }); break
-      default: return
-    }
-    if (panning && event.key.startsWith('Arrow')) {
-      setView(clampCamera(world.current, { x: view.x + (event.key === 'ArrowLeft' ? -step * 4 : event.key === 'ArrowRight' ? step * 4 : 0),
-        y: view.y + (event.key === 'ArrowUp' ? -step * 4 : event.key === 'ArrowDown' ? step * 4 : 0), zoom: view.zoom }))
-    } else showCursor(point)
-    event.preventDefault()
-  }
-
-  const selection = MATERIALS.find(material => material.id === settings.material)
-  const cursorSize = (settings.brush * 2 + 1) * scale
-  const sceneName = WORLDS.find(entry => entry.id === scene.id)?.name ?? (scene.id === 'empty' ? 'Blank World' : 'Classic Chamber')
-  const expanded = fullscreen || overlay
+  const activePad = PADS.find(p => p.tool === tool)
 
   return (
-    <div className="app">
-      <header className="masthead">
-        <div className="masthead-inner">
-          <div className="identity">
-            <div className="brandmark" aria-hidden="true"><Layers3 size={19} strokeWidth={2.4} /></div>
-            <strong>PLAYGROUND</strong>
+    <div className="app" onDragOver={e => { e.preventDefault(); setDragging(true) }}
+      onDragLeave={e => { if (!e.relatedTarget) setDragging(false) }} onDrop={onDrop}>
+      <div ref={stage} className="stage" onPointerDown={onPointerDown} onPointerMove={onPointerMove}
+        onPointerUp={endStroke} onPointerCancel={endStroke}
+        onPointerLeave={e => { if (!stroke.current && e.pointerType === 'mouse') cursor.current = null }}
+        onContextMenu={e => e.preventDefault()}
+        onWheel={e => setBrush(b => Math.max(1, Math.min(MAX_BRUSH, b + (e.deltaY < 0 ? 1 : -1))))}>
+        <div ref={layer} className="layer">
+          <canvas ref={base} className="base" />
+          <canvas ref={glow} className="glow" />
+          <canvas ref={bloom} className="bloom" />
+        </div>
+        <canvas ref={overlay} className="overlay" />
+      </div>
+
+      <header className="hud top">
+        <div className="brand">
+          <div className="logo">POWDER<b>RAVE</b></div>
+          <div className="chips">
+            {SCENES.map(s => (
+              <button key={s.id} className={`chip ${scene === s.id ? 'on' : ''}`} title={s.detail} onClick={() => loadScene(s.id)}>{s.name}</button>
+            ))}
           </div>
-          <div className="session-control" aria-label="Session controls">
-            <button onClick={save}><Save size={15} />Save</button>
-            <button onClick={load}><FolderOpen size={15} />Load</button>
-            <span className="divider" aria-hidden="true" />
-            <button onClick={download}><Download size={15} />Export</button>
-            <button onClick={() => filePicker.current?.click()}><Upload size={15} />Import</button>
-            <input ref={filePicker} hidden type="file" accept=".json,application/json" onChange={importFile} />
+        </div>
+        <div className="deck">
+          <div className="chips">
+            {(['demo', 'file', 'mic', 'tab'] as const).map(m => (
+              <button key={m} className={`chip ${source === m ? 'on' : ''}`} onClick={() => pickSource(m)}>
+                {{ demo: 'Demo', file: 'File', mic: 'Mic', tab: 'Tab' }[m]}
+              </button>
+            ))}
           </div>
+          <div className="meter">
+            <canvas ref={spec} width={264} height={60} className="spec" />
+            <i className="dot" />
+            <div className="bpm">{bpm || '—'}<small>BPM</small></div>
+            <button className={`chip mixbtn ${mixOpen ? 'on' : ''}`} onClick={() => setMixOpen(o => !o)} aria-expanded={mixOpen}>Mix</button>
+          </div>
+          {mixOpen && (
+            <section className="mix" aria-label="Mix and world settings">
+              {SLIDERS.map(({ key, label, hint, min, max }) => {
+                const value = key === 'glow' || key === 'sensitivity' ? settings[key] : settings.reactions[key]
+                const set = (v: number) => setSettings(s => key === 'glow' || key === 'sensitivity'
+                  ? { ...s, [key]: v } : { ...s, reactions: { ...s.reactions, [key]: v } })
+                return (
+                  <label key={key} className="slider" title={hint}>
+                    <span>{label}<em>{Math.round(value * 100)}%</em></span>
+                    <input type="range" min={min} max={max} step={.05} value={value}
+                      style={{ '--p': `${(value - min) / (max - min) * 100}%` } as CSSProperties}
+                      onChange={e => set(+e.target.value)} />
+                  </label>
+                )
+              })}
+              <div className="row-label">World detail</div>
+              <div className="seg">
+                {WORLD_SIZES.map(s => (
+                  <button key={s.id} className={settings.size === s.id ? 'on' : ''} onClick={() => changeSize(s.id)}>{s.name}</button>
+                ))}
+              </div>
+              <div className="row-label">World</div>
+              <div className="seg">
+                <button onClick={save}>Save</button>
+                <button onClick={load}>Load</button>
+                <button onClick={exportWorld}>Export</button>
+                <button onClick={() => worldPicker.current?.click()}>Import</button>
+              </div>
+              <button className="reset-mix" onClick={() => setSettings(s => ({ ...DEFAULT_SETTINGS, size: s.size }))}>Reset mix</button>
+            </section>
+          )}
         </div>
       </header>
 
-      <main className="workspace">
-        <div className="title-row">
-          <div>
-            <h1>Powder Lab<span>.</span></h1>
-            <p>Build, break, and remix worlds with music.</p>
+      <nav className="hud dock">
+        {PADS.map(p => (
+          <button key={p.tool} className={`pad ${tool === p.tool ? 'on' : ''}`} style={{ '--c': p.swatch } as CSSProperties}
+            title={`${p.name} (${p.key}): ${p.hint}`} onClick={() => setTool(p.tool)}>
+            <kbd>{p.key}</kbd><i className="sw" /><span>{p.name}</span>
+          </button>
+        ))}
+        <i className="sep" />
+        <button className="tool" title="Smaller brush ([)" onClick={() => setBrush(b => Math.max(1, b - 1))}>−</button>
+        <span className="size" title="Brush size (scroll to change)">{brush}</span>
+        <button className="tool" title="Bigger brush (])" onClick={() => setBrush(b => Math.min(MAX_BRUSH, b + 1))}>+</button>
+        <button className="tool" title={paused ? 'Resume (Space)' : 'Freeze (Space)'} onClick={() => setPaused(p => !p)}>{paused ? '▶' : '❚❚'}</button>
+        <button className="tool" title="Reset scene (R)" onClick={() => loadScene(scene)}>↺</button>
+        <i className="sep" />
+        <button className="dropbtn" title="Force a drop (D)" onClick={triggerDrop}>DROP</button>
+      </nav>
+
+      {activePad && !splash && <div className="hint" key={activePad.name}>{activePad.hint}</div>}
+      {drops > 0 && <div className="drop-text" key={drops}>DROP</div>}
+      <div className={`toast ${toast.text ? 'show' : ''}`} role="status">{toast.text}</div>
+      {dragging && <div className="dropzone">Drop it to play it</div>}
+      {paused && !splash && <div className="frozen">FROZEN · music still playing</div>}
+
+      <input ref={audioPicker} type="file" accept="audio/*" hidden onChange={e => {
+        const file = e.target.files?.[0]; e.target.value = ''
+        if (file) void playFile(file)
+      }} />
+      <input ref={worldPicker} type="file" accept="application/json,.json" hidden onChange={importWorld} />
+
+      {splash && (
+        <div className="splash">
+          <div className="inner">
+            <h1>POWDER<br />RAVE</h1>
+            <p>A falling-sand world that hears your music. Kicks make the ground jump, speakers blast the dirt around, and the drop sets everything off.</p>
+            <button className="start" onClick={start}>DROP THE BEAT</button>
+            <small>Sound on. You can also drag any audio file onto the page.</small>
           </div>
-          <button className="help-button" onClick={() => setHelp(true)}><CircleHelp size={16} /> How to play</button>
         </div>
-
-        <div className="lab">
-          <section className={overlay ? "chamber expanded" : "chamber"} ref={chamber} aria-label="Simulation and drawing tools">
-            <div className="stage-shell">
-              <div className="stage-head">
-                <div className="stage-title">
-                  <span className={settings.paused ? 'light paused' : 'light'} title={settings.paused ? 'Paused' : 'Running'} />
-                  <strong>{sceneName}</strong><span className="divider" /><span className="resolution">{scene.width} × {scene.height}</span>
-                </div>
-                <div className="stage-actions">
-                  <button className="world-button" onClick={() => setLibrary(true)} title="Open World Library"><Layers3 size={15} /><span>Worlds</span></button>
-                  <button className="reset-world" onClick={() => loadWorld(scene.id, scene.width, scene.height)} aria-label="Reset world" title="Reset world"><RotateCcw size={15} /></button>
-                  <button className="play-button" onClick={() => patch({ paused: !settings.paused })}>
-                    {settings.paused ? <Play size={15} /> : <Pause size={15} />}{settings.paused ? 'Resume' : 'Pause'}
-                  </button>
-                </div>
-              </div>
-              <div className="viewport">
-                <canvas ref={canvas} width={WIDTH} height={HEIGHT} className={panning ? "simulation pan-mode" : "simulation"} tabIndex={0}
-                  aria-label="Falling-sand chamber. Use arrow keys to move the brush, Enter to paint, and Space to pause."
-                  onPointerDown={startStroke} onPointerMove={moveStroke} onPointerUp={endStroke}
-                  onPointerCancel={endStroke} onLostPointerCapture={endStroke}
-                  onPointerLeave={() => showCursor(null)} onBlur={() => showCursor(null)}
-                  onContextMenu={event => event.preventDefault()} onKeyDown={canvasKeys} />
-                <canvas ref={halo} width={WIDTH} height={HEIGHT} className="halo" hidden={!settings.glow} aria-hidden="true" />
-                <div ref={cursor} className="brush-cursor" style={{ width: `${cursorSize / WIDTH * 100}%`, height: `${cursorSize / HEIGHT * 100}%` }} hidden aria-hidden="true" />
-                {canvasError && <div className="canvas-error" role="alert">{canvasError}</div>}
-              </div>
-              <div className="stage-foot">
-                <span className="particle-count"><i />{stats.count.toLocaleString()} particles<span className="regions-count" title="Active simulation regions">{stats.regions} active regions</span></span>
-                <div className="camera-controls" role="group" aria-label="Camera controls">
-                  <button aria-label="Pan tool" aria-pressed={panning} title="Pan tool" onClick={() => { setPanning(!panning); showCursor(null) }}><Hand size={15} /></button>
-                  <button aria-label="Zoom out" title="Zoom out" disabled={scale <= WIDTH / scene.width} onClick={() => changeZoom(1 / Math.SQRT2)}><ZoomOut size={15} /></button>
-                  <button className="fit-camera" aria-label="Fit world" title="Fit world" onClick={() => setView(fitCamera(world.current))}>{Math.round(scale * 100)}%</button>
-                  <button aria-label="Zoom in" title="Zoom in" disabled={scale >= 4} onClick={() => changeZoom(Math.SQRT2)}><ZoomIn size={15} /></button>
-                  <button aria-label={expanded ? 'Exit fullscreen' : 'Fullscreen'} title={expanded ? 'Exit fullscreen' : 'Fullscreen'} onClick={() => { void toggleFullscreen() }}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>
-                </div>
-                <div className="view-controls" aria-label="Visual effects">
-                  <button aria-pressed={settings.grid} onClick={() => patch({ grid: !settings.grid })}><Grid2X2 size={14} />Grid</button>
-                  <button aria-pressed={settings.fx} onClick={() => patch({ fx: !settings.fx })}><Activity size={15} />FX</button>
-                  <button aria-pressed={settings.glow} onClick={() => patch({ glow: !settings.glow })}><Sparkles size={14} />Glow</button>
-                </div>
-              </div>
-            </div>
-
-            <div className="toolbox">
-              <div className="toolbox-heading">
-                <h2>Materials</h2>
-                <label className="brush-size">
-                  <span>Brush radius</span>
-                  <input type="range" min={1} max={MAX_BRUSH} value={settings.brush}
-                    style={rangeStyle((settings.brush - 1) / (MAX_BRUSH - 1) * 100)}
-                    onChange={event => patch({ brush: event.target.valueAsNumber })} />
-                  <output>{settings.brush} px</output>
-                </label>
-              </div>
-              <div className="palette" aria-label="Drawing materials">
-                {MATERIALS.map((material, index) => (
-                  <button key={material.id} className="material" aria-pressed={settings.material === material.id}
-                    style={{ '--swatch': material.color } as CSSProperties}
-                    onClick={() => patch({ material: material.id })} title={`${material.behavior} [${index + 1}]`}>
-                    <span className="swatch" aria-hidden="true" />{material.name}<kbd>{index + 1}</kbd>
-                  </button>
-                ))}
-                <button className="material eraser" aria-pressed={settings.material === M.Empty}
-                  onClick={() => patch({ material: M.Empty })} title="Erase [E]"><Eraser size={15} />Erase<kbd>E</kbd></button>
-              </div>
-              <div className="material-note">{selection?.behavior ?? 'Removes particles and cuts through stone.'}</div>
-            </div>
-          </section>
-
-          <aside className="beat-panel" aria-labelledby="beat-title">
-            <div className="beat-heading">
-              <div className="beat-mark"><AudioLines size={19} strokeWidth={1.9} /></div>
-              <div>
-                <h2 id="beat-title">Beat engine</h2>
-                <span className="signal-label">{SOURCE_LABEL[source.mode]}</span>
-              </div>
-              <button className="switch master" type="button" role="switch" aria-label="Music reactions" aria-checked={settings.enabled} onClick={toggleReactions}><span /></button>
-            </div>
-
-            <AudioSource input={audio} state={source} simulator={
-              <div className="tempo">
-                <div className="tempo-top">
-                  <div className="tempo-value"><strong>{settings.bpm}</strong><span>BPM</span></div>
-                  <div className="tempo-buttons">
-                    <button aria-label="Decrease BPM" onClick={() => changeBpm(settings.bpm - 1)} disabled={settings.bpm <= MIN_BPM}><Minus size={15} /></button>
-                    <button aria-label="Increase BPM" onClick={() => changeBpm(settings.bpm + 1)} disabled={settings.bpm >= MAX_BPM}><Plus size={15} /></button>
-                  </div>
-                </div>
-                <input aria-label="Tempo (BPM)" type="range" min={MIN_BPM} max={MAX_BPM} value={settings.bpm}
-                  style={rangeStyle((settings.bpm - MIN_BPM) / (MAX_BPM - MIN_BPM) * 100)}
-                  onChange={event => changeBpm(event.target.valueAsNumber)} />
-                <div className="beat-steps" aria-hidden="true">
-                  {[0, 1, 2, 3].map(n => <span key={n} className={settings.enabled && stats.beat > 0 && (stats.beat - 1) % 4 === n ? 'hit' : ''} />)}
-                </div>
-              </div>
-            } />
-
-            <div className="reactions">
-              <h3>Music reactions</h3>
-              <label className="world-intensity" htmlFor="world-intensity">
-                <span>World intensity<output>{settings.intensity}%</output></span>
-                <input id="world-intensity" aria-label="World intensity" type="range" min={0} max={160} value={settings.intensity}
-                  style={rangeStyle(settings.intensity / 1.6)}
-                  onChange={event => patch({ intensity: event.target.valueAsNumber })} />
-              </label>
-              {bands.map(band => {
-                const { name, effect, color, Icon } = BAND_LABELS[band]
-                const value = settings.bands[band]
-                return (
-                  <div className="reaction" key={band} style={{ '--band': color } as CSSProperties}>
-                    <div className="reaction-top">
-                      <span className="reaction-icon"><Icon size={16} /></span>
-                      <div className="reaction-name"><strong>{name}</strong><small>{effect}</small></div>
-                      <button className="switch" type="button" role="switch" aria-label={name + ' reaction'} aria-checked={value.enabled}
-                        onClick={() => patchBand(band, { enabled: !value.enabled })}><span /></button>
-                    </div>
-                    <div className="sensitivity">
-                      <input type="range" min={0} max={100} value={value.sensitivity} aria-label={name + ' sensitivity'}
-                        style={rangeStyle(value.sensitivity, color)} onChange={event => patchBand(band, { sensitivity: event.target.valueAsNumber })} />
-                      <output>{value.sensitivity}%</output>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-            <div className="audio-note">
-              <AudioLines size={15} />
-              <span>{source.mode === 'simulator'
-                ? 'The BPM clock generates silent, simulated beats.'
-                : (source.mode === 'system' || source.mode === 'tab') ? 'Only audio is analyzed locally. Shared video is unused.' : 'Audio stays in your browser.'}</span>
-            </div>
-            <button className="test-kick" onClick={() => { interacted.current = true; world.current.shock(1) }} title="Send a bass pulse through the chamber"><Waves size={15} />Test kick</button>
-          </aside>
-        </div>
-      </main>
-
-      {library && <WorldLibrary initial={scene.id} currentWidth={scene.width} onSelect={loadWorld} onClose={() => setLibrary(false)} />}
-      <div className={notice.error ? 'toast error' : 'toast'} role="status" hidden={!notice.text}>{notice.text}</div>
-      <dialog ref={dialog} onClose={() => setHelp(false)}>
-        <h2>How to play</h2>
-        <p>Choose a material, then click or drag in the chamber. Hold to keep pouring. Right-click, Control-click, or select Erase to remove particles.</p>
-        <p>Build a stone basin and pour in water. Add oil on top, then ignite it with fire or electricity. Water cools lava into stone.</p>
-        <p>Use <kbd>1</kbd>–<kbd>8</kbd> to select materials, <kbd>E</kbd> to erase, <kbd>[</kbd> and <kbd>]</kbd> to resize, and <kbd>Space</kbd> to pause. With the chamber focused, use the arrow keys to move and <kbd>Enter</kbd> to paint.</p>
-        <p>Open Worlds to pick a scene and size. Scroll or use the zoom buttons. Turn on Pan and drag to look around. Use System or Tab to share playback, File to play a track, or BPM for a silent beat.</p>
-        <p>Save and Load use a local checkpoint. Export creates a portable JSON file you can reopen with Import.</p>
-        <form method="dialog"><button className="play-button" autoFocus>Done</button></form>
-      </dialog>
+      )}
     </div>
   )
 }

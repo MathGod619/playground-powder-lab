@@ -1,7 +1,3 @@
-import { LOCAL_KEY } from './session.ts'
-
-export const DRAFT_KEY = LOCAL_KEY + '-draft'
-
 let pending: Promise<IDBDatabase> | undefined
 
 function database() {
