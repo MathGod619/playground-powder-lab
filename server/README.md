@@ -8,7 +8,7 @@ The browser runs the game. This small Node bridge asks your own Ollama for bound
 - Tools: material rectangles, ellipses, diagonal lines, towers, bridges, individual drop-only bombs and speakers.
 - Environment: gravity, settling speed, wind, palette hue, water colour, and kick/speaker/spark/slosh music reactions.
 - Uploaded photos stay in the browser. Requests include only the prompt, basic world settings and the last photo's bounding rectangle.
-- The bridge URL is saved locally. The bearer token stays in panel memory, is never bundled, and clears on close.
+- The bridge URL is saved locally. The token stays in panel memory by default. Opt in to Remember on this device to save it after a successful connection; Forget connection removes it. Tokens are never bundled.
 - Director is available in Sandbox; it cannot modify a competitive Rave round.
 
 No server connection is preconfigured. Example is an explicitly labelled built-in template and makes no AI request.
@@ -48,6 +48,38 @@ The browser may ask permission to connect to your local network. Browser/OS rule
 For an existing approved private HTTPS route, proxy a dedicated path/port to 127.0.0.1:4190. Put that exact HTTPS URL into the panel. Keep bearer authentication. Never publish the token in Git, frontend env variables or a URL.
 
 ## Configuration
+
+### Permanent service and multiple devices
+
+On Ubuntu, from this checkout, stop the foreground bridge and run:
+
+```sh
+node server/install-service.mjs
+systemctl --user daemon-reload
+systemctl --user enable --now powder-rave-director
+sudo loginctl enable-linger serveroverlord
+systemctl --user status powder-rave-director --no-pager
+tailscale serve status
+```
+
+The installer writes only ~/.config/powder-rave-director/bridge.env (mode 600) and this user's powder-rave-director.service. It preserves an existing saved token, otherwise uses the current exported token or generates one. It resolves the current Node executable, so no TypeScript support or global install is required. Linger lets the user service start at boot without an SSH login. Logs: journalctl --user -u powder-rave-director -n 30 --no-pager.
+
+Inspect Tailscale's existing Serve status before assigning a dedicated unused HTTPS port. If 8443 is unused:
+
+```sh
+sudo tailscale serve --bg --https=8443 http://127.0.0.1:4190
+tailscale serve status
+```
+
+Use the exact HTTPS URL printed by Tailscale as the Bridge URL. This private endpoint requires Tailscale on each device. It works on different Wi-Fi networks and cellular, without the Mac running or SSH tunnels. Do not use Funnel or reset existing Serve configuration.
+
+Enter the token once in each device's browser, select Remember on this device, and Test connection. To read the private saved token on your server (do not share the output):
+
+```sh
+sed -n 's/^DIRECTOR_TOKEN=//p' /home/serveroverlord/.config/powder-rave-director/bridge.env
+```
+
+Remember is per browser and per game origin. Browser private mode/cleared site data will require reconnecting. For changes pulled later: systemctl --user restart powder-rave-director. To stop the service: systemctl --user disable --now powder-rave-director. Do not disable linger if other user services depend on it.
 
 - DIRECTOR_TOKEN: required, 32+ characters, startup fails without it.
 - OLLAMA_MODEL: qwen3:4b-instruct by default. Health verifies it is installed.

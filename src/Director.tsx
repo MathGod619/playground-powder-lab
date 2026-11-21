@@ -3,6 +3,7 @@ import { EXAMPLE_PLAN, validatePlan, type ScenePlan } from './director-plan.ts'
 import { prepareScene } from './director-world.ts'
 import { createRenderer } from './render.ts'
 import type { World } from './world.ts'
+import { loadConnection, saveConnection, forgetConnection } from './director-connection.mjs'
 
 type Props = { getWorld: () => World; context: () => object; apply: (world: World, plan: ScenePlan) => void; undo: () => void; canUndo: boolean; close: () => void }
 const TEMPLATE_KEY = 'powder-rave-director-templates-v1'
@@ -10,8 +11,10 @@ function readTemplates(): ScenePlan[] {
   try { return JSON.parse(localStorage.getItem(TEMPLATE_KEY) || '[]').slice(0, 12).map(validatePlan) } catch { return [] }
 }
 export function Director({ getWorld, context, apply, undo, canUndo, close }: Props) {
-  const [endpoint, setEndpoint] = useState(() => localStorage.getItem('powder-rave-director-url') || '')
-  const [token, setToken] = useState('')
+  const [saved] = useState(() => { try { return loadConnection(localStorage) } catch { return { url: '', token: '', remember: false } } })
+  const [endpoint, setEndpoint] = useState(() => { try { return saved.url || localStorage.getItem('powder-rave-director-url') || '' } catch { return saved.url } })
+  const [token, setToken] = useState(saved.token)
+  const [remember, setRemember] = useState(saved.remember)
   const [mode, setMode] = useState<'adjust' | 'create'>('adjust')
   const [prompt, setPrompt] = useState('')
   const [status, setStatus] = useState('Connect your private Ollama bridge, or preview the example.')
@@ -45,13 +48,15 @@ export function Director({ getWorld, context, apply, undo, canUndo, close }: Pro
     try {
       const url = baseUrl()
       if (!check && !prompt.trim()) throw new Error('Describe the world you want first.')
-      localStorage.setItem('powder-rave-director-url', url)
+      try { localStorage.setItem('powder-rave-director-url', url) } catch { /* connection can still work without storage */ }
       setStatus(check ? 'Checking your server and Ollama model…' : 'Your server is designing the scene…')
       const response = await fetch(url + (check ? '/health' : '/plan'), { method: check ? 'GET' : 'POST', signal: controller.signal,
         headers: { Authorization: 'Bearer ' + token, ...(!check ? { 'Content-Type': 'application/json' } : {}) },
         ...(!check ? { body: JSON.stringify({ prompt, mode, context: context() }) } : {}) })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error || 'Bridge request failed.')
+      try { saveConnection(localStorage, url, token, remember) }
+      catch { setStatus('Connected, but this browser could not remember the connection.'); return }
       if (check) setStatus('Connected · ' + data.model)
       else {
         const plan = validatePlan(data.plan)
@@ -76,8 +81,16 @@ export function Director({ getWorld, context, apply, undo, canUndo, close }: Pro
     <details><summary>Server connection</summary>
       <label>Bridge URL<input type="url" placeholder="https://your-private-server:8443" value={endpoint} onChange={e => setEndpoint(e.target.value)} disabled={busy} /></label>
       <label>Bridge token<input type="password" autoComplete="off" value={token} onChange={e => setToken(e.target.value)} disabled={busy} /></label>
-      <small>The token stays in memory and clears when this panel closes.</small>
+      <label className="director-remember"><input type="checkbox" checked={remember} disabled={busy} onChange={e => {
+        setRemember(e.target.checked)
+        if (!e.target.checked) { try { saveConnection(localStorage, '', '', false) } catch { /* unavailable storage */ } }
+      }} />Remember on this device</label>
+      <small>{remember ? 'After a successful connection, the token is saved in this browser. Use only on your own devices.' : 'The token clears when this panel closes. Enable Remember to keep it between visits.'}</small>
       <button className="chip" disabled={busy} onClick={() => void request(true)}>Test connection</button>
+      <button className="chip" disabled={busy} onClick={() => {
+        try { forgetConnection(localStorage) } catch { /* still clear memory */ }
+        setToken(''); setEndpoint(''); setRemember(false); setStatus('Connection forgotten on this device.')
+      }}>Forget connection</button>
     </details>
     <div className="seg"><button className={mode === 'adjust' ? 'on' : ''} disabled={busy} onClick={() => { setMode('adjust'); setPending(null) }}>Adjust world</button><button className={mode === 'create' ? 'on' : ''} disabled={busy} onClick={() => { setMode('create'); setPending(null) }}>Create scene</button></div>
     <label>Tell the Director<textarea maxLength={1600} rows={3} value={prompt} disabled={busy} onChange={e => { setPrompt(e.target.value); setPending(null) }} placeholder="Build two towers and a bridge around my photo. Make gravity lighter." /></label>
