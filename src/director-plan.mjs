@@ -1,5 +1,5 @@
 export const MATERIALS = ['sand', 'water', 'wall', 'fire', 'oil', 'lava', 'smoke', 'glitter', 'seed', 'speaker', 'rocket', 'brick', 'powder', 'bomb', 'cloud'];
-export const SHAPES = ['rect', 'ellipse', 'line', 'tower', 'bridge', 'bomb', 'speaker'];
+export const SHAPES = ['rect', 'ellipse', 'line', 'tower', 'bridge', 'bomb', 'speaker', 'plant', 'rock', 'arch', 'building', 'terrain', 'aquarium', 'speaker-stack'];
 export const SCENE_NAMES = ['garden', 'volcano', 'city', 'moon', 'sea', 'storm', 'blank'];
 const number = (min, max) => ({ type: ['number', 'null'], minimum: min, maximum: max });
 export const PLAN_SCHEMA = {

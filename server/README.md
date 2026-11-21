@@ -5,7 +5,8 @@ The browser runs the game. This small Node bridge asks your own Ollama for bound
 ## What ships
 
 - Director panel: Adjust world / Create scene, explicit Generate, static ghost preview, Apply / Discard, single-step Undo and 12 locally saved templates.
-- Tools: material rectangles, ellipses, diagonal lines, towers, bridges, individual drop-only bombs and speakers.
+- Tools: material rectangles, ellipses, diagonal lines, towers, bridges, individual drop-only bombs and speakers, plus detailed branching plants, shaded rocks, masonry arches, windowed buildings, layered terrain, full aquariums and speaker stacks.
+- Create scene starters: Prismatic aquarium, Afterhours skyline and Lunar conservatory. Preview starter works locally without a server; Generate preview asks Ollama for additions and environment changes while retaining the detailed foundation. Custom mode lets the model arrange any supported objects.
 - Environment: gravity, settling speed, wind, palette hue, water colour, and kick/speaker/spark/slosh music reactions.
 - Uploaded photos stay in the browser. Requests include only the prompt, basic world settings and the last photo's bounding rectangle.
 - The bridge URL is saved locally. The token stays in panel memory by default. Opt in to Remember on this device to save it after a successful connection; Forget connection removes it. Tokens are never bundled.
@@ -94,6 +95,8 @@ POST /plan (bearer auth, application/json): {prompt, mode: adjust|create, contex
 Response: {plan, model}. Runtime schema/validation is in src/director-plan.mjs, shared by bridge and browser. TypeScript types are in src/director-plan.ts.
 Requests are capped at 12 KB; prompts at 1,600 characters; plans at 48 tools. One generation at a time, six per minute per socket address, 75-second upstream timeout. Proxy headers are deliberately not trusted.
 Unknown tools, scripts, file paths, arbitrary URLs, nonfinite values and scene replacement in Adjust mode are rejected.
+Detailed objects enforce physical roles: plants use living plant cells; rocks default to wall; buildings and arches default to brick unless wall is selected; terrain has solid layered rock and a shallow sand cap. Speaker stacks contain real speaker cells. The aquarium builds a walled tank, water, three shaded branching plants, rocks, an arch and rising air pockets, with underwater plant growth enabled. These objects stay in place without damage; loose sand and water retain normal physics. Old primitive tools and saved plans retain their behavior.
+Create requests can optionally include recipe: aquarium|skyline|moon-garden. The bridge supplies that starter to the model in percentages and prepends its validated foundation to the returned additions. Starters are forbidden in Adjust mode. Preview, Apply, Undo and local template saving use the same final plan. Save/load retains underwater physics flags, while older save files remain readable.
 Generation requests cap the model at 16 operations and encode Adjust/Create mode into the output grammar.
 The model uses an explicit coordinateSpace: percent drawing contract and never receives grid dimensions. Its output grammar enumerates whole-number percentages (positions 0–100, sizes 1–100). The bridge converts to the game's strict 0–1 coordinates and repairs zero-size strokes to the minimum visible size. For explicitly declared units, an off-screen origin or oversized dimension within 25 percentage points of the legal range is fitted back onto the canvas, keeping its dimensions when possible. Larger errors, negative sizes, invalid values and ambiguous coordinates still fail validation and trigger repair. Existing in-range shapes retain their positions and normal edge clipping. Units are never guessed from large numbers. Preview all model scenes before applying.
 Invalid or truncated scene JSON gets one repair attempt within the same 75-second deadline. No unvalidated output is applied.
@@ -101,4 +104,4 @@ Failures include the actual API rejection, validation reason or timeout, also pr
 
 Tests exercise the real HTTP bridge with a simulated Ollama upstream; they do not claim verification of your physical server or model quality. Run npm test and npm run build. On the real bridge, confirm Test connection, a generated preview, Apply, Undo, image preservation, template save and both audio modes.
 
-For an actual model check on Ubuntu without using the permanent bridge token: node server/check-model.mjs. This asks the configured Ollama model to generate an aquarium, validates the result, and prints pass/fail plus non-secret coordinate details.
+For an actual model check on Ubuntu without using the permanent bridge token: node server/check-model.mjs. This asks the configured Ollama model to customize the detailed aquarium starter, validates the result, and prints pass/fail plus non-secret shape, material and coordinate details. It checks valid model output, not artistic quality.

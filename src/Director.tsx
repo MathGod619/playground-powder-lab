@@ -4,6 +4,7 @@ import { prepareScene } from './director-world.ts'
 import { createRenderer } from './render.ts'
 import type { World } from './world.ts'
 import { loadConnection, saveConnection, forgetConnection } from './director-connection.mjs'
+import { getRecipe, SCENE_RECIPES } from './director-recipes.mjs'
 
 type Props = { getWorld: () => World; context: () => object; apply: (world: World, plan: ScenePlan) => void; undo: () => void; canUndo: boolean; close: () => void }
 const TEMPLATE_KEY = 'powder-rave-director-templates-v1'
@@ -16,6 +17,7 @@ export function Director({ getWorld, context, apply, undo, canUndo, close }: Pro
   const [token, setToken] = useState(saved.token)
   const [remember, setRemember] = useState(saved.remember)
   const [mode, setMode] = useState<'adjust' | 'create'>('adjust')
+  const [recipe, setRecipe] = useState('')
   const [prompt, setPrompt] = useState('')
   const [status, setStatus] = useState('Connect your private Ollama bridge, or preview the example.')
   const [busy, setBusy] = useState(false)
@@ -47,12 +49,12 @@ export function Director({ getWorld, context, apply, undo, canUndo, close }: Pro
     const timeout = setTimeout(() => controller.abort(), 85000)
     try {
       const url = baseUrl()
-      if (!check && !prompt.trim()) throw new Error('Describe the world you want first.')
+      if (!check && !prompt.trim() && !(mode === 'create' && recipe)) throw new Error('Describe the world you want first.')
       try { localStorage.setItem('powder-rave-director-url', url) } catch { /* connection can still work without storage */ }
       setStatus(check ? 'Checking your server and Ollama model…' : 'Your server is designing the scene…')
       const response = await fetch(url + (check ? '/health' : '/plan'), { method: check ? 'GET' : 'POST', signal: controller.signal,
         headers: { Authorization: 'Bearer ' + token, ...(!check ? { 'Content-Type': 'application/json' } : {}) },
-        ...(!check ? { body: JSON.stringify({ prompt, mode, context: context() }) } : {}) })
+        ...(!check ? { body: JSON.stringify({ prompt: prompt.trim() || 'Keep this detailed starter and its music reactions.', mode, context: context(), ...(mode === 'create' && recipe ? { recipe } : {}) }) } : {}) })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error || 'Bridge request failed.')
       try { saveConnection(localStorage, url, token, remember) }
@@ -93,13 +95,21 @@ export function Director({ getWorld, context, apply, undo, canUndo, close }: Pro
       }}>Forget connection</button>
     </details>
     <div className="seg"><button className={mode === 'adjust' ? 'on' : ''} disabled={busy} onClick={() => { setMode('adjust'); setPending(null) }}>Adjust world</button><button className={mode === 'create' ? 'on' : ''} disabled={busy} onClick={() => { setMode('create'); setPending(null) }}>Create scene</button></div>
+    {mode === 'create' && <div className="director-starter">
+      <label>Starting scene<select value={recipe} disabled={busy} onChange={e => { setRecipe(e.target.value); setPending(null) }}>
+        <option value="">Custom · let the Director design it</option>
+        {SCENE_RECIPES.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+      </select></label>
+      {recipe && <><small>Detailed scenery stays solid. Loose surfaces and water react to the music. Describe what you want to add or change.</small>
+        <button className="chip" disabled={busy} onClick={() => preview(getRecipe(recipe))}>Preview starter · no server needed</button></>}
+    </div>}
     <label>Tell the Director<textarea maxLength={1600} rows={3} value={prompt} disabled={busy} onChange={e => { setPrompt(e.target.value); setPending(null) }} placeholder="Build two towers and a bridge around my photo. Make gravity lighter." /></label>
     <div className="director-actions"><button className="chip on" disabled={busy} onClick={() => void request()}>Generate preview</button>{busy && <button className="chip" onClick={() => abort.current?.abort()}>Cancel</button>}<button className="chip" disabled={busy} onClick={() => preview(EXAMPLE_PLAN)}>Example</button></div>
     <p role="status">{status}</p>
     {pending && <section aria-label="Scene preview">
       <strong>{pending.plan.title}</strong><p>{pending.plan.description}</p>
       <canvas ref={canvas} className="director-preview" aria-label="Ghost preview of proposed world" />
-      <small>{pending.plan.scene ? 'Replaces the world' : 'Edits the current world'} · {pending.plan.operations.length} structures · gravity {pending.world.rules.gravity.toFixed(2)}</small>
+      <small>{pending.plan.scene ? 'Replaces the world' : 'Edits the current world'} · {pending.plan.operations.length} objects · gravity {pending.world.rules.gravity.toFixed(2)}</small>
       <div className="director-actions"><button className="chip on" onClick={() => { apply(pending.world, pending.plan); setPending(null); setStatus('Applied. Use Undo to restore the previous world and mix.') }}>Apply</button><button className="chip" onClick={() => setPending(null)}>Discard</button><button className="chip" onClick={saveTemplate}>Save as template</button></div>
     </section>}
     <button className="chip" disabled={!canUndo || busy} onClick={() => { undo(); setPending(null); setStatus('Previous world and mix restored.') }}>Undo last Director change</button>

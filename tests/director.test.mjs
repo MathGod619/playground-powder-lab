@@ -160,6 +160,30 @@ test('bridge exposes Ollama API rejection rather than blaming the prompt', async
     assert.equal(calls, 1)
   })
 })
+test('bridge gives the model detailed tools and retains the selected scene starter', async t => {
+  await withBridge(t, async (_url, options) => {
+    const payload = JSON.parse(options.body), user = JSON.parse(payload.messages[1].content.replace('\n/no_think', ''))
+    assert.ok(payload.format.properties.operations.items.properties.shape.enum.includes('aquarium'))
+    assert.ok(payload.messages[0].content.includes('Never draw buildings, rocks or plants out of sand'))
+    assert.equal(user.starter.operations[0].x, 10, 'starter context uses percentages')
+    assert.deepEqual(payload.format.properties.scene.enum, ['blank'])
+    const result = plan(); result.operations = []; result.environment = { ...EMPTY_ENV, hue: 220 }
+    return Response.json({ message: { content: JSON.stringify(result) } })
+  }, async request => {
+    const response = await request('/plan', { mode: 'create', recipe: 'aquarium', prompt: 'Cool blue aquarium', context: {} })
+    assert.equal(response.status, 200)
+    const { plan: result } = await response.json()
+    assert.equal(result.operations[0].shape, 'aquarium')
+    assert.equal(result.environment.hue, 220)
+    assert.ok(prepareScene(new World(120, 80), result).count(M.Plant) > 100)
+  })
+})
+test('bridge rejects unknown starters and never replaces an Adjust world using a starter', async t => {
+  await withBridge(t, async () => { throw Error('must not reach model') }, async request => {
+    for (const [mode, recipe] of [['create', 'unknown'], ['adjust', 'aquarium']])
+      assert.equal((await request('/plan', { mode, recipe, prompt: 'Hi', context: {} })).status, 400)
+  })
+})
 test('bridge retries truncated output and stops after the bounded repair', async t => {
   let calls = 0
   await withBridge(t, async () => { calls++; return Response.json({ done_reason: 'length', message: { content: '{"title":' } }) }, async request => {
