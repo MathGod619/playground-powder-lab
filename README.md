@@ -1,45 +1,43 @@
 # PLAYGROUND · Powder Lab
 
-PLAYGROUND v0.3 is a React, TypeScript, and Vite falling-sand sandbox with live audio analysis. The chamber runs on a dedicated 2D cellular-automata engine and renders its particles with Canvas 2D.
+Powder Lab v0.4 is a music-reactive 2D particle playground. The World Library contains editable simulations made from the same eight materials you can paint and erase.
 
 ## Run on macOS
 
 1. Install Node.js 22.18 or later in the 22.x line, or Node.js 24 or later. npm comes with Node.js.
-2. Unzip the download and open a Terminal window in the extracted `playground-powder-lab` folder. You can type `cd ` with a trailing space, drag the folder onto Terminal, then press Return.
-3. Run:
+2. Unzip the download and open Terminal in the extracted `playground-powder-lab` folder.
+3. Run `npm install`, then `npm run dev`.
+4. Open the local URL printed by Vite. Press Control-C to stop the server.
 
-   ```sh
-   npm install
-   npm run dev
-   ```
+Run `npm test` for physics, audio analysis, world behavior, camera, and session tests. Run `npm run build` for the production build, and `npm run preview` to serve that build.
 
-4. Open the local address Vite prints, usually [http://localhost:5173/](http://localhost:5173/). Press Control-C in Terminal to stop the server.
+## Worlds and camera
 
-Run `npm test` for the physics, audio analysis, beat, and save/load tests. Run `npm run build` to type-check and produce `dist/`. Run `npm run preview` to serve that build locally.
+Open **Worlds** to load Volcano, Deep Ocean, Neon City, Sandstorm, or a blank world. Choose Classic (416 × 232), Large (832 × 464), or Huge (1248 × 696). Large Volcano is the starting world. Dense scenes such as Huge Deep Ocean can run slower on some devices. Inactive regions sleep without stopping the rest of the world.
 
-## Play
+- Volcano sends lava and smoke out of the open crater on bass hits. Water turns lava into stone, and filling the vent can stop an eruption.
+- Deep Ocean has opposing upper and lower currents. Bass can disturb the submerged sand.
+- Neon City generates short lightning paths on treble hits. Water carries a charge that can ignite nearby oil.
+- Sandstorm lifts loose sand with wind. Strong bass hits trigger heavier gusts.
 
-- Choose sand, water, fire, stone, oil, lava, smoke, or electricity and drag in the chamber. Hold down to keep pouring while it runs. Use Erase, right-click, or Control-click to remove particles.
-- Change the brush radius with the slider. Pause lets you draw while the physics is frozen. Reset clears the chamber. Demo brings back the starter terrain.
-- Oil floats on water and catches fire. Water quenches fire and cools lava into stone. Electricity passes through water as a short-lived charge and can ignite oil.
-- Grid, FX, and Glow are visual switches. FX shows the shockwave and wind. Glow adds a halo around hot, charged, and water-surface pixels. The beat controls change the forces themselves.
-- Use **1–8** to pick a material, **E** to erase, **[** and **]** to resize, and **Space** to pause or resume. Focus the chamber with Tab, use arrow keys to position the brush, and press **Enter** to paint.
+Use the scroll wheel or zoom buttons to zoom. Click the zoom percentage to fit the whole world. Select **Pan** and drag, or drag with the middle mouse button. Use **Fullscreen** to expand the chamber. The brush radius is measured in world cells. Right-click or Control-click erases.
 
-## Audio sources
+Use **1–8** to pick a material, **E** to erase, **[** and **]** to resize, and **Space** to pause or resume. With the chamber focused, the arrow keys position the brush and **Enter** paints. In Pan mode the arrows pan the view.
 
-- **BPM** runs the original silent 45–200 BPM simulator.
-- **File** plays a local audio track. Choose the file and press **Play file**. Format support depends on the browser. MP3 or WAV are good starting points. Choose **Demo loop** to hear the included drum and synth loop through the same analyzer.
-- **Mic** uses the Mac’s default audio input. For a USB interface or virtual loopback, select it in macOS **System Settings → Sound → Input** before you connect. Live input is analyzed without speaker monitoring. Microphone access requires browser permission on localhost or HTTPS.
-- **Share** uses the browser’s share picker. In desktop Chrome, pick the tab playing music and enable **Share tab audio**. Other system or window audio choices depend on the browser and macOS. The browser may also grant a video track for the sharing session. The lab leaves that track unused and releases the session when you disconnect.
+## Audio
 
-The spectrum shows the signal from the selected real source. Bass impulses lift water and loose grains. Midrange attacks drive alternating wind, and treble attacks create sparks. Use the master switch, reaction switches, and sensitivity sliders to tune the physics. **Test kick** fires a manual bass pulse.
+- **System** requests screen or window audio through the desktop Chrome picker. Select a screen or window and enable **Share audio** when offered. This is the path for playing music in a desktop app. Availability depends on Chrome and macOS. The lab reports a missing audio track and will not switch to your mic.
+- **Tab** shares Chrome tab playback. Open Spotify Web Player, YouTube, or another audio tab, choose it in the picker, and enable **Share tab audio**.
+- **File** plays a local track. Choose a file and select **Play file**, or try the included **Demo loop**. MP3 or WAV are widely supported.
+- **BPM** runs the silent 45–200 BPM simulator.
+- **Mic or line input** is optional under System. It uses the Mac’s selected audio input. Capture requires explicit browser permission on localhost or HTTPS.
 
-Click **Disconnect** or switch sources to stop playback or release a capture. Audio analysis stays in the browser. The app does not upload or record audio, and it does not reconnect microphones or shares automatically. Keep the lab visible to see the live reactions.
+Use **World intensity** alongside the three band controls to tune the strength of the physics. **Test kick** acts as an independent bass pulse. **FX** controls the visual overlays and **Glow** controls material halos.
+
+Audio stays in the browser. The Screen Capture API may also return a video track. The lab does not display or record video and releases capture when you disconnect or switch sources.
 
 ## Sessions
 
-- **Save** creates a checkpoint in this browser. **Load** restores that checkpoint. The lab also maintains a separate working draft and reopens it on refresh.
-- **Export** downloads a JSON file containing the particles, beat timing, and settings. **Import** checks the file before replacing the chamber. Exports are portable across browsers and computers. Sessions from the previous Powder Lab build still open. Files, live sources, and permissions are separate from saves.
-- Browser storage is specific to the local address and port. Export a JSON file for a durable copy. Older Canvas Lab shape and connection saves still use the original Phase 1 app.
+**Save** creates a browser checkpoint. **Load** restores it. The app keeps a separate draft and can reopen saves from earlier Powder Lab versions in the same browser. **Export** and **Import** move edited worlds, camera position, size, and simulation settings as JSON. Audio sources and permissions are not stored. The deployed site and localhost have separate browser storage, so use a JSON file to move a world between them.
 
-Particle painting, wind, and the optional visual effects draw inspiration from [DAN-BALL’s Powder Game 2](https://dan-ball.jp/en/javagame/dust2/).
+Particle painting, wind, and optional visual effects draw inspiration from [DAN-BALL’s Powder Game 2](https://dan-ball.jp/en/javagame/dust2/).

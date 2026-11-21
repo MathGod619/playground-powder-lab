@@ -1,6 +1,6 @@
 import { Onsets, Spectrum } from './signal.ts'
 
-export type AudioMode = 'simulator' | 'file' | 'input' | 'share'
+export type AudioMode = 'simulator' | 'file' | 'input' | 'tab' | 'system'
 export type AudioState = {
   mode: AudioMode
   status: 'idle' | 'pending' | 'ready' | 'live' | 'error'
@@ -50,6 +50,11 @@ export class AudioInput {
       const analyser = context.createAnalyser()
       analyser.fftSize = 2048
       analyser.smoothingTimeConstant = 0
+      // Pull the analyzer graph even when the live source has no speaker output.
+      const silentOutput = context.createGain()
+      silentOutput.gain.value = 0
+      analyser.connect(silentOutput)
+      silentOutput.connect(context.destination)
       this.context = context
       this.analyser = analyser
       this.bins = new Float32Array(analyser.frequencyBinCount)
@@ -124,7 +129,8 @@ export class AudioInput {
 
   async connect() {
     const mode = this.state.mode
-    if (mode !== 'input' && mode !== 'share') return
+    if (mode === 'simulator' || mode === 'file') return
+    const share = mode === 'tab' || mode === 'system'
     this.disconnect()
     const generation = this.generation
     this.publish({ status: 'pending', label: '' })
@@ -136,14 +142,19 @@ export class AudioInput {
       const resumed = context.resume()
       void resumed.catch(() => {})
       // Start the picker in the click handler so the browser can verify user activation.
-      if (mode === 'share') {
+      if (share) {
         if (!devices.getDisplayMedia) throw new Error('Audio sharing is unavailable in this browser. Try desktop Chrome or an audio file.')
+        const tab = mode === 'tab'
         const options = {
-          video: { displaySurface: 'browser' },
+          video: { displaySurface: tab ? 'browser' : 'monitor' },
           audio: true,
-          systemAudio: 'include',
+          systemAudio: tab ? 'exclude' : 'include',
           selfBrowserSurface: 'exclude',
-        } satisfies DisplayMediaStreamOptions & { systemAudio: string; selfBrowserSurface: string }
+          windowAudio: tab ? 'exclude' : 'system',
+          monitorTypeSurfaces: tab ? 'exclude' : 'include',
+        } satisfies DisplayMediaStreamOptions & {
+          systemAudio: string; selfBrowserSurface: string; windowAudio: string; monitorTypeSurfaces: string
+        }
         received = await devices.getDisplayMedia(options)
       } else {
         received = await devices.getUserMedia({
@@ -156,8 +167,17 @@ export class AudioInput {
         return
       }
       const [audioTrack] = received.getAudioTracks()
+      const surface = received.getVideoTracks()[0]?.getSettings().displaySurface
+      if (mode === 'system' && surface === 'browser') {
+        throw new Error('That was a browser tab. Use Browser Tab, or select a screen or window for system audio.')
+      }
+      if (mode === 'tab' && surface && surface !== 'browser') {
+        throw new Error('Choose a browser tab for tab audio. Use System Audio for a screen or window.')
+      }
       if (!audioTrack || audioTrack.readyState === 'ended') {
-        throw new Error('No audio track was shared. Choose a tab and enable its audio in the browser picker.')
+        throw new Error(mode === 'system'
+          ? 'No system audio track. Enable audio in the screen or window picker if available. Browser Tab and File also work.'
+          : 'No audio track. Choose the tab playing music and enable tab audio.')
       }
       this.stream = received
       this.streamNode = context.createMediaStreamSource(new MediaStream([audioTrack]))
@@ -165,20 +185,20 @@ export class AudioInput {
       const end = () => {
         if (generation !== this.generation) return
         this.stop()
-        this.publish({ label: mode === 'share' ? 'Sharing ended.' : 'Audio input disconnected.' })
+        this.publish({ label: share ? 'Sharing ended.' : 'Audio input disconnected.' })
       }
       for (const track of received.getTracks()) track.addEventListener('ended', end, { once: true })
       // A shared video track may be required to keep the browser's audio session alive.
       // It is never attached to an element, analyser, or recorder.
       await resumed
       if (generation !== this.generation) return
-      this.publish({ status: 'live', label: mode === 'share' ? 'Shared audio' : (audioTrack.label || 'Default audio input') })
+      this.publish({ status: 'live', label: share ? (mode === 'tab' ? 'Browser tab audio' : 'Shared system audio') : (audioTrack.label || 'Default audio input') })
     } catch (error) {
       stopTracks(received)
       if (generation !== this.generation) return
       this.disconnect()
       const label = error instanceof DOMException && error.name === 'NotAllowedError'
-        ? mode === 'share' ? 'Audio sharing was cancelled or blocked.' : 'Microphone permission was denied.'
+        ? share ? 'Audio sharing was cancelled or blocked.' : 'Microphone permission was denied.'
         : error instanceof Error ? error.message : 'Could not connect the audio source.'
       this.publish({ status: 'error', label })
     }

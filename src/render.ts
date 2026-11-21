@@ -1,3 +1,5 @@
+import type { Camera } from './camera.ts'
+import { WORLDS } from './worlds.ts'
 import type { Settings } from './beat.ts'
 import type { Sandbox } from './engine.ts'
 import { Material as M } from './materials.ts'
@@ -38,42 +40,54 @@ export function createRenderer(canvas: HTMLCanvasElement, halo: HTMLCanvasElemen
   let lastWorld: Sandbox | null = null
   let lastRevision = -1
   let lastSettings: Settings | null = null
+  let lastCamera: Camera | null = null
+  const viewColumns = new Int32Array(width)
+  const viewRows = new Int32Array(height)
 
-  return (world: Sandbox, settings: Settings) => {
-    if (world === lastWorld && world.revision === lastRevision && lastSettings &&
+  return (world: Sandbox, settings: Settings, camera: Camera) => {
+    if (world === lastWorld && world.revision === lastRevision && lastCamera === camera && lastSettings &&
         settings.glow === lastSettings.glow && settings.grid === lastSettings.grid && settings.fx === lastSettings.fx) return
     lastWorld = world
     lastRevision = world.revision
     lastSettings = settings
+    lastCamera = camera
+    const { x: offsetX, y: offsetY, zoom } = camera
+    const theme = WORLDS.find(scene => scene.id === world.template)?.sky ?? [12, 17, 23]
+    for (let x = 0; x < width; x++) viewColumns[x] = Math.min(world.width - 1, Math.floor(offsetX + x / zoom))
+    for (let y = 0; y < height; y++) viewRows[y] = Math.min(world.height - 1, Math.floor(offsetY + y / zoom))
     const data = image.data
     const light = glowImage.data
     if (settings.glow) light.fill(0)
     for (let y = 0; y < height; y++) {
-      const gridY = settings.grid && y % 16 === 0
+      const worldY = viewRows[y]
+      const gridStep = zoom < .75 ? 32 : 16
+      const gridY = settings.grid && (worldY % gridStep < Math.max(1, Math.round(1 / zoom)))
       for (let x = 0; x < width; x++) {
         const i = y * width + x
         const offset = i * 4
-        const id = world.cells[i]
-        const shade = texture[i]
+        const worldX = viewColumns[x]
+        const index = worldY * world.width + worldX
+        const id = world.cells[index]
+        const shade = texture[index % size]
         let color: RGB
         let rim = 0
         if (id === M.Empty) {
-          const grid = gridY || (settings.grid && x % 16 === 0) ? 5 : 0
+          const grid = gridY || (settings.grid && (worldX % gridStep < Math.max(1, Math.round(1 / zoom)))) ? 5 : 0
           const d = background[i] + grid + Number(shade === 0)
-          data[offset] = 12 + d
-          data[offset + 1] = 17 + d
-          data[offset + 2] = 23 + d
+          data[offset] = theme[0] + d
+          data[offset + 1] = theme[1] + d
+          data[offset + 2] = theme[2] + d
         } else {
           const level = shade >= 15 ? 3 : shade >= 11 ? 2 : shade >= 5 ? 1 : 0
-          color = world.charge[i] > 25 ? chargeColor : palette[id][level]
-          if (y > 0 && world.cells[i - width] === M.Empty) {
+          color = world.charge[index] > 14 ? chargeColor : palette[id][level]
+          if (worldY > 0 && world.cells[index - world.width] === M.Empty) {
             rim = id === M.Water || id === M.Lava ? 28 : id === M.Stone ? 14 : 6
           }
           data[offset] = color[0] + rim
           data[offset + 1] = color[1] + rim
           data[offset + 2] = color[2] + rim
           if (settings.glow && (id === M.Fire || id === M.Lava || id === M.Electricity ||
-              world.charge[i] > 23 || (id === M.Water && rim > 0))) {
+              world.charge[index] > 14 || (id === M.Water && rim > 0))) {
             light[offset] = data[offset]
             light[offset + 1] = data[offset + 1]
             light[offset + 2] = data[offset + 2]
@@ -88,27 +102,31 @@ export function createRenderer(canvas: HTMLCanvasElement, halo: HTMLCanvasElemen
 
     if (settings.fx && world.wave && world.wave.radius > 0) {
       const { x, y, radius, strength } = world.wave
-      const alpha = (1 - radius / (width * 0.6)) * strength
+      const alpha = (1 - radius / (world.width * 0.6)) * strength
+      const centerX = (x - offsetX) * zoom
+      const centerY = (y - offsetY) * zoom
       ctx.strokeStyle = `rgba(198, 226, 242, ${alpha * 0.58})`
       ctx.lineWidth = 0.65
       ctx.setLineDash([2, 3])
       ctx.beginPath()
-      ctx.arc(x, y, radius, 0, Math.PI * 2)
+      ctx.arc(centerX, centerY, radius * zoom, 0, Math.PI * 2)
       ctx.stroke()
       ctx.setLineDash([])
       ctx.strokeStyle = `rgba(121, 178, 206, ${alpha * 0.15})`
       ctx.beginPath()
-      ctx.arc(x, y, radius + 3, 0, Math.PI * 2)
+      ctx.arc(centerX, centerY, (radius + 3) * zoom, 0, Math.PI * 2)
       ctx.stroke()
     }
     if (settings.fx && world.wind) {
       const { direction, strength, ticks } = world.wind
-      const progress = world.tickNumber * direction * 3
-      ctx.fillStyle = `rgba(135, 212, 215, ${strength * ticks / 80})`
+      const ocean = world.template === 'ocean'
+      ctx.fillStyle = `rgba(135, 212, 215, ${strength * ticks / 74})`
       for (let n = 0; n < 32; n++) {
+        const y = (n * 41 + 13) % (ocean ? height : height - 30)
+        const progress = world.tickNumber * direction * (ocean && viewRows[y] > world.height * .63 ? -3 : 3)
         const x = (((n * 211 + progress) % width) + width) % width
-        const y = (n * 41 + 13) % (height - 30)
-        if (world.cells[y * width + x] === M.Empty) ctx.fillRect(x, y, 4 + n % 6, 1)
+        const cell = world.cells[viewRows[y] * world.width + viewColumns[x]]
+        if (cell === M.Empty || (ocean && cell === M.Water)) ctx.fillRect(x, y, 4 + n % 6, 1)
       }
     }
   }

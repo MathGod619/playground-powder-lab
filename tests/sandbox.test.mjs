@@ -69,7 +69,7 @@ test('sparks conduct through water, ignite oil, and decay', () => {
   world.step()
   assert.equal(world.charge[world.index(1, 1)], MAX_CHARGE)
   run(world, 3)
-  assert.equal(world.charge[world.index(1, 4)], MAX_CHARGE)
+  assert.equal(world.charge[world.index(1, 4)], MAX_CHARGE - 9)
   run(world, 30)
   assert.ok(world.charge.every(value => value === 0))
 

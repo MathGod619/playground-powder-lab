@@ -6,6 +6,7 @@ export const bands = ['bass', 'mid', 'treble'] as const
 export type Band = typeof bands[number]
 export type Settings = {
   bpm: number
+  intensity: number
   enabled: boolean
   paused: boolean
   glow: boolean
@@ -18,6 +19,7 @@ export type Settings = {
 
 export const defaultSettings: Settings = {
   bpm: 108,
+  intensity: 100,
   enabled: true,
   paused: false,
   glow: false,
@@ -37,7 +39,7 @@ export const newClock = (): Clock => ({ beat: 0, phase: 0 })
 
 function strength(settings: Settings, band: Band) {
   const control = settings.bands[band]
-  return control.enabled ? control.sensitivity / 100 : 0
+  return control.enabled ? Math.min(1, control.sensitivity * settings.intensity / 10000) : 0
 }
 
 export function applyAudioHits(
@@ -51,10 +53,10 @@ export function applyAudioHits(
   return bass > 0
 }
 
-export function advanceBeat(clock: Clock, settings: Settings, world: Sandbox) {
+export function advanceBeat(clock: Clock, settings: Settings, world: Sandbox, elapsedTicks = 1) {
   if (!settings.enabled || settings.paused) return false
   const before = clock.phase
-  clock.phase += settings.bpm / (60 * HZ)
+  clock.phase += settings.bpm * elapsedTicks / (60 * HZ)
   const hit = clock.phase >= 1 - 1e-10
   if (hit) {
     clock.phase = Math.max(0, clock.phase - 1)
