@@ -131,6 +131,26 @@ test('bridge repairs an invalid scene once with the concrete validation error', 
     assert.equal(attempts, 2)
   })
 })
+test('bridge accepts the reported sixth rectangle at 110 percent and produces a visible preview', async t => {
+  let calls = 0
+  const generated = plan()
+  generated.coordinateSpace = 'percent'
+  generated.operations = Array.from({ length: 6 }, (_, i) => ({ shape: 'rect', material: 'seed',
+    x: 10 + i * 10, y: i === 5 ? 110 : 60, w: 5, h: 20, color: '#00ff00' }))
+  await withBridge(t, async () => {
+    calls++
+    return Response.json({ message: { content: JSON.stringify(generated) } })
+  }, async request => {
+    const response = await request('/plan', { mode: 'create', prompt: 'Aquarium with plants', context: {} })
+    assert.equal(response.status, 200)
+    const { plan: result } = await response.json()
+    assert.equal(result.operations[5].y, .8)
+    validatePlan(result)
+    const preview = prepareScene(new World(100, 100), result)
+    assert.equal(preview.type[preview.index(60, 80)], M.Plant)
+    assert.equal(calls, 1)
+  })
+})
 test('bridge exposes Ollama API rejection rather than blaming the prompt', async t => {
   let calls = 0
   await withBridge(t, async () => { calls++; return Response.json({ error: 'model does not support this option' }, { status: 400 }) }, async request => {

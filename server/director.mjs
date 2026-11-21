@@ -4,10 +4,11 @@ import { pathToFileURL } from 'node:url'
 import { modelSchema, parseModelPlan } from './model-plan.mjs'
 
 const SYSTEM = `You are the Powder Rave scene director. Return only a scene plan matching the supplied JSON schema.
-Use coordinateSpace: "percent". ALL operation x/y/w/h values are percentages of the screen, 0 to 100.
+Use coordinateSpace: "percent". ALL operation x/y/w/h values are whole-number percentages of the screen, 0 to 100 (sizes 1 to 100).
 x/y are the top-left corner, w/h are sizes, not the bottom-right corner. x goes left to right; y goes top to bottom.
 Example: x=20,y=40,w=10,h=45 means a structure 10% wide and 45% tall starting 20% across and 40% down.
 Existing terrain usually starts near y=80. Use positive widths/heights. Do not output pixel/cell coordinates.
+Keep x+w <= 100 and y+h <= 100 so the complete shape stays on screen. Never put an object below y=100.
 Use null for every environment setting the user did not request changing. gravity 1 is normal; fall 1 is normal; wind -1 left, 1 right.
 kick/speakers/sparks/slosh control music reactions from 0 to 2. Water can be recolored with waterColor.
 For adjust mode scene MUST be null: preserve current world and uploaded images. For create mode select a base scene (blank for custom architecture).
@@ -103,7 +104,7 @@ export function createDirectorServer({ token, origins, model = 'qwen3:4b-instruc
           const reason = validation instanceof SyntaxError ? 'The response was not complete valid JSON.' : validation.message
           if (attempt === 1) throw new Error('Scene validation failed after one repair: ' + reason)
           messages.push({ role: 'assistant', content: String(reply.message?.content || '').slice(0, 16000) })
-          messages.push({ role: 'user', content: 'Repair the scene JSON. Error: ' + reason + ' Return a complete compact scene using at most 8 operations and all required fields. Set coordinateSpace to percent. Each x/y must be 0..100; w/h must be positive and <=100. For example x=20,y=40,w=10,h=45. Unchanged environment values must be null. /no_think' })
+          messages.push({ role: 'user', content: 'Repair the scene JSON. Error: ' + reason + ' Coordinate errors above are game fractions AFTER division by 100 (1.1 means 110 percent). Return a complete compact scene using at most 8 operations and all required fields. Set coordinateSpace to percent. Each x/y must be an integer 0..100; w/h integers 1..100. Keep x+w <=100 and y+h <=100. For example x=20,y=40,w=10,h=45. Unchanged environment values must be null. /no_think' })
         }
       }
     } catch (error) {
