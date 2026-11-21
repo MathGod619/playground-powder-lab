@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { renderServiceUnit } from './service-unit.mjs'
 
 // Creates only this user's Director service/config. Does not alter Ollama, Tailscale or other units.
 const taskHome = homedir()
@@ -25,24 +26,7 @@ if (!stat) {
 }
 chmodSync(configDir, 0o700)
 chmodSync(envPath, 0o600)
-const quote = s => '"' + s.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('%', '%%') + '"'
-const unit = `[Unit]
-Description=Powder Rave Ollama Scene Director
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=${quote(root)}
-EnvironmentFile=${quote(envPath)}
-ExecStart=${quote(process.execPath)} ${quote(path.join(root, 'server', 'director.mjs'))}
-Restart=on-failure
-RestartSec=5
-UMask=0077
-NoNewPrivileges=true
-
-[Install]
-WantedBy=default.target
-`
+const unit = renderServiceUnit({ root, node: process.execPath, envPath })
 const unitPath = path.join(unitDir, 'powder-rave-director.service')
 if (lstatSync(unitPath, { throwIfNoEntry: false })?.isSymbolicLink()) throw Error('Refusing to replace a symlinked service.')
 writeFileSync(unitPath, unit, { mode: 0o600 })

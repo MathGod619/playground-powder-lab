@@ -30,13 +30,17 @@ export function validatePlan(value) {
             throw new Error('Scene contains unsupported fields.');
         return obj;
     };
-    const p = exact(value, ['title', 'description', 'scene', 'environment', 'operations']);
+    const p = exact(structuredClone(value), ['title', 'description', 'scene', 'environment', 'operations']);
     if (typeof p.title !== 'string' || !p.title.trim() || p.title.length > 80 || typeof p.description !== 'string' || !p.description.trim() || p.description.length > 500)
         throw new Error('Invalid scene description.');
     if (p.scene !== null && !SCENE_NAMES.includes(p.scene))
         throw new Error('Unsupported scene.');
     const envKeys = ['gravity', 'fall', 'wind', 'hue', 'waterColor', 'kick', 'speakers', 'sparks', 'slosh'];
     const e = exact(p.environment, envKeys);
+    // Hue is an angle. Equivalent finite rotations are safe to wrap; physics,
+    // operation bounds and all other fields still require their strict ranges.
+    if (typeof e.hue === 'number' && Number.isFinite(e.hue))
+        e.hue = ((e.hue % 360) + 360) % 360;
     const color = (v) => v === null || typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v);
     const bounded = (v, lo, hi) => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
     for (const [key, lo, hi] of [['gravity', .05, 2], ['fall', .05, 1], ['wind', -1, 1], ['hue', 0, 360], ['kick', 0, 2], ['speakers', 0, 2], ['sparks', 0, 2], ['slosh', 0, 2]]) {
