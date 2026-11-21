@@ -13,15 +13,25 @@ export function drawAtmosphere(ctx: CanvasRenderingContext2D, world: World, time
   glow.addColorStop(1, 'transparent')
   ctx.fillStyle = glow; ctx.fillRect(0, 0, w, h)
   if (scene === 'garden' || scene === 'blank' || scene === 'moon') {
-    // Layered aurora ribbons bend with the mids and swell with bass.
-    for (let band = 0; band < 4; band++) {
-      ctx.beginPath()
-      for (let i = 0; i <= 40; i++) {
-        const x = i / 40 * w, y = h * (.18 + band * .065) + Math.sin(i * .18 + time * .35 + band) * h * (.02 + e.mid * .055)
-        if (!i) ctx.moveTo(x, y); else ctx.lineTo(x, y)
+    // Aurora ribbons: invisible in quiet passages, thin neon lines that bend with the mids as energy builds.
+    const presence = Math.min(.8, Math.max(0, (e.level - .2) / .6) + drop * .6)
+    if (presence > .01) {
+      ctx.globalCompositeOperation = 'lighter'
+      for (let band = 0; band < 4; band++) {
+        ctx.beginPath()
+        for (let i = 0; i <= 60; i++) {
+          const x = i / 60 * w, y = h * (.2 + band * .055) + Math.sin(i * .14 + time * .35 + band * 1.7) * h * (.015 + e.mid * .05)
+          if (!i) ctx.moveTo(x, y); else ctx.lineTo(x, y)
+        }
+        const color = (a: number) => `hsla(${hue + band * 35},100%,68%,${a * presence})`
+        ctx.strokeStyle = color(.08)
+        ctx.lineWidth = Math.max(4, h * (.012 + e.bass * .016))
+        ctx.stroke()
+        ctx.strokeStyle = color(.5)
+        ctx.lineWidth = Math.max(1, h * (.0018 + e.bass * .002))
+        ctx.stroke()
       }
-      ctx.strokeStyle = `hsla(${hue + band * 28},100%,70%,${.025 + e.level * .16})`
-      ctx.lineWidth = h * (.008 + e.bass * .02); ctx.stroke()
+      ctx.globalCompositeOperation = 'source-over'
     }
   }
   if (scene === 'city') {

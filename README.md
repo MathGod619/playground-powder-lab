@@ -42,8 +42,15 @@ Explosions smash walls, brick and speakers into gravel and throw everything else
 - Paint by dragging. Right-click erases.
 - **1–0** pick materials, **C** brick, **G** powder, **B** bomb, **V** cloud, **X** blast, **E** erase, **[ ]** or scroll wheel change brush size.
 - **Space** freezes the world while the music keeps playing. **R** resets the scene. **D** forces a drop.
-- **Clip 10s** records the world with sound. **Catch the drop** arms a recording that starts during the build-up (or 5 s before a mapped drop) and ends 6 s after the drop, so the clip is built around the drop. When it's done you can watch it, download it (MP4 where the browser supports it, otherwise WebM), or share it.
-- **Mix** has sliders for each reaction, glow and beat sensitivity (raise it for a quiet mic), the world detail level (Chunky / Normal / Fine), and Save / Load / Export / Import.
+- **Clip** opens a menu: record 10 seconds now, or **Catch the next drop**, which arms a recording that starts during the build-up (or 5 s before a mapped drop) and ends 6 s after the drop, so the clip is built around the drop. When it's done you can watch it, download it (MP4 where the browser supports it, otherwise WebM), or share it.
+- The world name at the top left opens the world list.
+- **Mix** has sliders for each reaction, atmosphere, glow and beat sensitivity (raise it for a quiet mic), the world detail level (Chunky / Normal / Fine), and Save / Load / Export / Import.
+
+## Rave Mode
+
+Switch from **Sandbox** to **Rave** for a 90-second round with three drops. The music charges the DROP button; when it reads **DROP!**, press it (or **D**).
+
+Each drop scores for what it does to the world in the next three seconds: bricks demolished, walls smashed into gravel, bombs set off, flowers bloomed and material thrown. Scores are scaled so every detail level is worth the same. Press on the beat for a multiplier: **PERFECT ×2** within 70 ms of a beat, **GREAT ×1.5** within 140 ms. Nothing scores between drops, so use that time to set up: plant bombs, stack brick, sow seeds, place speakers.
 
 ## Worlds
 

@@ -103,6 +103,21 @@ export class World {
     return n
   }
 
+  /** Counts the things Rave Mode scores in one pass. */
+  census() {
+    let bricks = 0, gravel = 0, flowers = 0, bombs = 0
+    const t = this.type
+    for (let i = 0; i < this.size; i++) {
+      const v = t[i]
+      if (v === M.Brick) bricks++
+      else if (v === M.Gravel) gravel++
+      else if (v === M.Flower) flowers++
+      else if (v === M.Bomb) bombs++
+    }
+    for (let k = 0; k < this.particles; k++) if (this.pType[k] === M.Gravel) gravel++
+    return { bricks, gravel, flowers, bombs, airborne: this.particles, cells: this.size }
+  }
+
   clear() {
     this.type.fill(0)
     this.life.fill(0)

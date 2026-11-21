@@ -3,5 +3,6 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
-  base: '/playground-powder-lab/',
+  // Relative paths work both on GitHub Pages (/playground-powder-lab/) and at a site root (chatgpt.site).
+  base: './',
 })

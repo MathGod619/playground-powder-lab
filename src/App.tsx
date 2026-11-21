@@ -3,7 +3,7 @@ import type { ChangeEvent, CSSProperties, DragEvent, PointerEvent as ReactPointe
 import { MapPlayer } from './analysis.ts'
 import { AudioEngine, type SourceMode } from './audio.ts'
 import { BeatDetector } from './detector.ts'
-import { automaticDrops, MusicEnvelope, RaveSession } from './immersion.ts'
+import { automaticDrops, beatOffset, MusicEnvelope, RaveSession, type DropResult } from './immersion.ts'
 import { drawAtmosphere } from './atmosphere.ts'
 import { BLAST, isClickTool, isSolidTool, M, PADS, type Tool } from './materials.ts'
 import { ClipRecorder, canRecord, type Clip } from './recorder.ts'
@@ -65,7 +65,11 @@ export function App() {
   const [clip, setClip] = useState<Clip | null>(null)
   const [mapped, setMapped] = useState<'none' | 'analysing' | 'ready'>('none')
   const [dropReady, setDropReady] = useState(false)
-  const [rave, setRave] = useState({ active: false, finished: false, charge: 0, drops: 0, score: 0, seconds: 90 })
+  const [rave, setRave] = useState({ active: false, finished: false, charge: 0, drops: 0, score: 0, seconds: 90, scoring: false })
+  const [result, setResult] = useState<DropResult | null>(null)
+  const [menu, setMenu] = useState<'none' | 'scenes' | 'rec'>('none')
+  /** Last kick and beat length, on the same clock the drop button is read against. */
+  const beat = useRef({ last: -Infinity, period: 0 })
   const session = useRef(new RaveSession())
   const envelope = useRef(new MusicEnvelope())
   const sky = useRef<HTMLCanvasElement>(null)
@@ -134,9 +138,11 @@ export function App() {
     const challenge = session.current
     if (challenge.active) {
       if (!manual) return
-      if (challenge.charge < 1) { say('Let the music fill your energy meter first.'); return }
-      challenge.observe(world.current.particles, world.current.count(M.Flower), world.current.count(M.Brick))
-      challenge.drop()
+      if (challenge.charge < 1) { say('Still charging. Let the music fill the meter.'); return }
+      const t = audio.fileTime() ?? performance.now() / 1000
+      const r = challenge.drop(beatOffset(t, beat.current.last, beat.current.period), world.current.census())
+      if (!r) return
+      setResult({ ...r })
     }
     setDropReady(false)
     if (live.current.armed && !recorder.active && manual && canRecord()) {
@@ -180,9 +186,13 @@ export function App() {
       const events = map ? map.update(songTime!) : heard
       if (events.drop && automaticDrops(audio.mode, session.current.active || session.current.finished)) triggerDrop(false)
       if (audio.mode === 'tab' && (heard.breakdown || heard.drop)) setDropReady(true)
-      if (events.kick) w.onKick(events.kick, settings.reactions, paused)
+      if (events.kick) {
+        w.onKick(events.kick, settings.reactions, paused)
+        beat.current.last = map ? songTime! : now / 1000
+      }
       if (events.hat) w.onHat(events.hat, settings.reactions, paused)
       const nowBpm = map ? map.map.bpm : detector.bpm
+      beat.current.period = nowBpm ? 60 / nowBpm : 0
       if (nowBpm !== shownBpm) { shownBpm = nowBpm; setBpm(shownBpm) }
       const until = map && !session.current.active ? map.untilDrop(songTime!) : Infinity
       const count = until <= 3.2 ? Math.ceil(until) : null
@@ -205,9 +215,9 @@ export function App() {
       w.decay()
       if (now - lastStatus > 250) {
         lastStatus = now
-        session.current.observe(w.particles, w.count(M.Flower), w.count(M.Brick))
         const r = session.current
-        setRave({ active: r.active, finished: r.finished, charge: r.charge, drops: r.drops, score: r.score, seconds: Math.ceil(r.seconds) })
+        if (r.scoring) { r.observe(w.census()); if (r.result) setResult({ ...r.result }) }
+        setRave({ active: r.active, finished: r.finished, charge: r.charge, drops: r.drops, score: r.score, seconds: Math.ceil(r.seconds), scoring: r.scoring })
       }
 
       const shake = w.pulse.shake, sx = (Math.random() - .5) * shake, sy = (Math.random() - .5) * shake
@@ -260,7 +270,7 @@ export function App() {
       else if (key === ' ') { e.preventDefault(); setPaused(p => !p) }
       else if (key === 'd') triggerDrop()
       else if (key === 'r') loadScene(world.current.scene)
-      else if (key === 'escape') setMixOpen(false)
+      else if (key === 'escape') { setMixOpen(false); setMenu('none') }
     }
     addEventListener('keydown', onKey)
     return () => removeEventListener('keydown', onKey)
@@ -361,15 +371,18 @@ export function App() {
   function startRave() {
     const w = makeWorld(live.current.settings.size, world.current.scene)
     install(w)
-    session.current.start(w.particles, w.count(M.Flower), w.count(M.Brick))
-    setRave({ active: true, finished: false, charge: 0, drops: 0, score: 0, seconds: 90 })
+    session.current.start()
+    setRave({ active: true, finished: false, charge: 0, drops: 0, score: 0, seconds: 90, scoring: false })
+    setResult(null)
     setDropReady(false)
-    say('90 seconds. Let the music charge three manual drops. Create particles, grow plants or demolish buildings to score.')
+    setMenu('none')
+    say('90 seconds, three drops. Set up bombs, bricks and seeds, then drop on the beat. Bigger damage, bigger score.')
   }
 
   function leaveRave() {
     session.current.active = session.current.finished = false
     setRave(r => ({ ...r, active: false, finished: false }))
+    setResult(null)
   }
 
   async function save() {
@@ -427,6 +440,7 @@ export function App() {
     if (splash || (e.button !== 0 && e.button !== 2)) return
     e.currentTarget.setPointerCapture(e.pointerId)
     setMixOpen(false)
+    setMenu('none')
     const cell = toCell(e)
     if (e.button === 0 && isClickTool(tool)) {
       if (tool === BLAST) world.current.blast(cell.x, cell.y, blastRadius(brush), .8 + brush / 25, true)
@@ -484,16 +498,29 @@ export function App() {
         <div className="brand">
           <div className="logo">POWDER<b>RAVE</b></div>
           <div className="chips">
-            {SCENES.map(s => (
-              <button key={s.id} className={`chip ${scene === s.id ? 'on' : ''}`} title={s.detail} onClick={() => loadScene(s.id)}>{s.name}</button>
-            ))}
+            <div className="menu-wrap">
+              <button className={`chip scene-btn ${menu === 'scenes' ? 'on' : ''}`} aria-expanded={menu === 'scenes'}
+                onClick={() => setMenu(m => m === 'scenes' ? 'none' : 'scenes')}>
+                {SCENES.find(x => x.id === scene)?.name ?? 'World'} <span aria-hidden>▾</span>
+              </button>
+              {menu === 'scenes' && (
+                <div className="menu" role="menu">
+                  {SCENES.map(x => (
+                    <button key={x.id} role="menuitem" className={scene === x.id ? 'on' : ''}
+                      onClick={() => { setMenu('none'); loadScene(x.id) }}>
+                      <b>{x.name}</b><small>{x.detail}</small>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="seg mode" role="group" aria-label="Mode">
+              <button className={!rave.active && !rave.finished ? 'on' : ''} onClick={leaveRave}>Sandbox</button>
+              <button className={rave.active || rave.finished ? 'on' : ''} onClick={startRave}>Rave</button>
+            </div>
           </div>
         </div>
         <div className="deck">
-          <div className="chips">
-            <button className={`chip ${!rave.active && !rave.finished ? 'on' : ''}`} onClick={leaveRave}>Sandbox</button>
-            <button className={`chip ${rave.active || rave.finished ? 'on' : ''}`} onClick={startRave}>{rave.finished ? 'Play Rave again' : 'Rave Mode'}</button>
-          </div>
           <div className="chips">
             {(['demo', 'file', 'mic', 'tab'] as const).map(m => (
               <button key={m} className={`chip ${source === m ? 'on' : ''}`} onClick={() => pickSource(m)}>
@@ -510,21 +537,31 @@ export function App() {
                 {mapped === 'ready' ? 'MAPPED' : 'MAPPING…'}
               </span>
             )}
-            <button className={`chip mixbtn ${mixOpen ? 'on' : ''}`} onClick={() => setMixOpen(o => !o)} aria-expanded={mixOpen}>Mix</button>
-          </div>
-          <div className="chips rec">
-            <button className={`chip recbtn ${recording ? 'live' : ''}`} onClick={record} title="Record a clip of the world with sound">
-              <i />{recording ? `Stop · ${recording}s` : `Clip ${CLIP_SECONDS}s`}
-            </button>
-            <button className={`chip ${armed ? 'armed' : ''}`} onClick={toggleCatch} disabled={!!recording}
-              title="Starts recording during the build-up so the clip lands on the drop">
-              {armed ? 'Waiting for the drop…' : 'Catch the drop'}
-            </button>
+            <div className="menu-wrap">
+              <button className={`chip recbtn ${recording ? 'live' : armed ? 'armed' : ''}`} aria-expanded={menu === 'rec'}
+                title="Record a clip"
+                onClick={() => recording ? record() : armed ? toggleCatch() : setMenu(m => m === 'rec' ? 'none' : 'rec')}>
+                <i />{recording ? `${recording}s` : armed ? 'Armed' : 'Clip'}
+              </button>
+              {menu === 'rec' && (
+                <div className="menu right" role="menu">
+                  <button role="menuitem" onClick={() => { setMenu('none'); record() }}>
+                    <b>Record {CLIP_SECONDS} seconds</b><small>Starts now, with sound.</small>
+                  </button>
+                  <button role="menuitem" onClick={() => { setMenu('none'); toggleCatch() }}>
+                    <b>Catch the next drop</b><small>Starts in the build-up so the clip lands on the drop.</small>
+                  </button>
+                </div>
+              )}
+            </div>
+            <button className={`chip mixbtn ${mixOpen ? 'on' : ''}`} onClick={() => { setMenu('none'); setMixOpen(o => !o) }} aria-expanded={mixOpen}>Mix</button>
           </div>
           {mixOpen && (
             <section className="mix" aria-label="Mix and world settings">
-              <label className="slider">Atmosphere
+              <label className="slider" title="Aurora, light beams and drifting particles behind the world">
+                <span>Atmosphere<em>{Math.round(settings.atmosphere * 100)}%</em></span>
                 <input type="range" min="0" max="1" step=".1" value={settings.atmosphere}
+                  style={{ '--p': `${settings.atmosphere * 100}%` } as CSSProperties}
                   onChange={e => setSettings(s => ({ ...s, atmosphere: +e.target.value }))} />
               </label>
               {SLIDERS.map(({ key, label, hint, min, max }) => {
@@ -575,19 +612,40 @@ export function App() {
         <i className="sep" />
       </nav>
 
-      {!splash && <button className="dropbtn main-drop" title="Manual drop (D)" onClick={() => triggerDrop()}>
-        {rave.active ? rave.charge >= 1 ? 'DROP READY' : `CHARGING ${Math.floor(rave.charge * 100)}%` : dropReady ? 'DROP READY' : 'DROP'}
-      </button>}
-      {activePad && !splash && <div className="hint" key={activePad.name}>{activePad.hint}</div>}
-      {!splash && (source === 'tab' || rave.active) && <div className="manual-drop">MANUAL DROP · Press D or use the DROP button</div>}
-      {!splash && (rave.active || rave.finished) && (
-        <section className="rave-status" aria-label="Rave challenge" aria-live="polite">
-          <strong>{rave.finished ? rave.drops === 3 ? 'RAVE COMPLETE' : 'TIME UP' : 'THREE DROPS'}</strong>
-          <span>{rave.drops}/3 drops · {rave.score.toLocaleString()} points · {rave.seconds}s</span>
-          {rave.active && <><progress max="1" value={rave.charge} aria-label="Drop energy" /><small>Music fills energy. Manual drops release it.</small></>}
-          {rave.finished && <button className="chip" onClick={leaveRave}>Return to Sandbox</button>}
-        </section>
+      {!splash && (
+        <div className="drop-corner">
+          {(rave.active || rave.finished) && (
+            <section className="rave-card" aria-label="Rave challenge" aria-live="polite">
+              <div className="rave-top">
+                <strong>{rave.finished ? rave.drops === 3 ? 'RAVE COMPLETE' : 'TIME UP' : 'RAVE'}</strong>
+                <span className="pips" aria-label={`${rave.drops} of 3 drops`}>{[0, 1, 2].map(n => <i key={n} className={n < rave.drops ? 'on' : ''} />)}</span>
+                {rave.active && <span className={`clock ${rave.seconds <= 10 ? 'low' : ''}`}>{rave.seconds}s</span>}
+              </div>
+              <div className="score">{rave.score.toLocaleString()}<small>pts</small></div>
+              {result && (
+                <div className={`grade ${result.grade.label === 'PERFECT' ? 'perfect' : result.grade.label === 'GREAT' ? 'great' : ''}`} key={result.drop}>
+                  Drop {result.drop}: {result.grade.label}{result.grade.multiplier > 1 ? ` ×${result.grade.multiplier}` : ''} · +{result.points.toLocaleString()}
+                </div>
+              )}
+              {rave.finished && (
+                <div className="rave-actions">
+                  <button className="chip on" onClick={startRave}>Play again</button>
+                  <button className="chip" onClick={leaveRave}>Sandbox</button>
+                </div>
+              )}
+            </section>
+          )}
+          {!rave.finished && (
+            <button className={`dropbtn main-drop ${(rave.active ? rave.charge >= 1 && !rave.scoring : dropReady) ? 'ready' : ''}`}
+              style={{ '--charge': `${(rave.active ? rave.charge : 1) * 100}%` } as CSSProperties}
+              title={rave.active ? 'The music charges your drop. Press D on the beat for a multiplier.' : 'Force a drop (D)'}
+              onClick={() => triggerDrop()}>
+              {rave.active ? rave.scoring ? 'SCORING…' : rave.charge >= 1 ? 'DROP!' : `CHARGING ${Math.floor(rave.charge * 100)}%` : dropReady ? 'DROP READY' : 'DROP'}
+            </button>
+          )}
+        </div>
       )}
+      {activePad && !splash && <div className="hint" key={activePad.name}>{activePad.hint}</div>}
       {drops > 0 && <div className="drop-text" key={drops}>DROP</div>}
       {countdown !== null && <div className="countdown" key={countdown}>DROP IN <b>{countdown}</b></div>}
       {clip && (

@@ -16,7 +16,37 @@ export class MusicEnvelope {
 
 export const automaticDrops = (source: SourceMode | null, challenge: boolean) => source !== 'tab' && !challenge
 
-/** Three charged manual drops; charge is earned by listening, score by changing the world. */
+/** One pass over the world counting what a drop can change. */
+export type Census = { bricks: number; gravel: number; flowers: number; bombs: number; airborne: number; cells?: number }
+
+/** Scores are normalised to a world of this many cells, so Chunky and Fine detail score alike. */
+const REFERENCE_CELLS = 90_000
+
+export type Grade = { label: 'PERFECT' | 'GREAT' | 'OFF BEAT'; multiplier: number }
+/** How close to a beat a drop was pressed (seconds either side). */
+export function gradeTiming(offset: number): Grade {
+  if (offset <= .07) return { label: 'PERFECT', multiplier: 2 }
+  if (offset <= .14) return { label: 'GREAT', multiplier: 1.5 }
+  return { label: 'OFF BEAT', multiplier: 1 }
+}
+
+/** Seconds between `time` and the nearest beat, given the last kick and the beat length. Infinity if unknown. */
+export function beatOffset(time: number, lastKick: number, period: number) {
+  if (!(period > 0) || !Number.isFinite(lastKick)) return Infinity
+  const since = ((time - lastKick) % period + period) % period
+  return Math.min(since, period - since)
+}
+
+export type DropResult = { grade: Grade; points: number; drop: number }
+
+const IMPACT_SECONDS = 3
+const BASE_POINTS = 500
+
+/**
+ * Rave Mode: 90 seconds, three manual drops. The music charges each drop; a drop scores for
+ * what it does to the world in the next three seconds (demolition, smashed walls, chained bombs,
+ * bloomed flowers, material thrown) times how on-beat it was pressed.
+ */
 export class RaveSession {
   active = false
   finished = false
@@ -24,28 +54,59 @@ export class RaveSession {
   drops = 0
   score = 0
   seconds = 90
-  private lastParticles = 0
-  private lastFlowers = 0
-  private lastBricks = 0
-  start(particles: number, flowers: number, bricks: number) {
+  /** The drop being scored right now (or the last one), for the on-screen popup. */
+  result: DropResult | null = null
+  private clock = 0
+  private impactUntil = -1
+  private baseline: Census | null = null
+  private peakAir = 0
+  private banked = 0
+
+  start() {
     this.active = true; this.finished = false; this.charge = 0; this.drops = 0; this.score = 0; this.seconds = 90
-    this.lastParticles = particles; this.lastFlowers = flowers; this.lastBricks = bricks
+    this.result = null; this.clock = 0; this.impactUntil = -1; this.baseline = null; this.banked = 0
   }
+
+  get scoring() { return this.clock < this.impactUntil }
+
   tick(dt: number, energy: number) {
     if (!this.active) return
-    this.seconds = Math.max(0, this.seconds - dt)
-    this.charge = Math.min(1, this.charge + dt * energy / 6)
-    if (!this.seconds) { this.active = false; this.finished = true }
+    this.clock += dt
+    if (this.drops < 3) {
+      this.seconds = Math.max(0, this.seconds - dt)
+      if (!this.scoring) this.charge = Math.min(1, this.charge + dt * energy / 6)
+    }
+    const timeUp = this.seconds === 0 || this.drops === 3
+    if (timeUp && !this.scoring) { this.active = false; this.finished = true }
   }
-  observe(particles: number, flowers: number, bricks: number) {
-    if (!this.active) return
-    this.score += Math.max(0, particles - this.lastParticles) + Math.max(0, flowers - this.lastFlowers) * 12 + Math.max(0, this.lastBricks - bricks) * 3
-    this.lastParticles = particles; this.lastFlowers = flowers; this.lastBricks = bricks
+
+  /** Fires a drop if charged. `offset` is seconds from the nearest beat. */
+  drop(offset: number, census: Census) {
+    if (!this.active || this.charge < 1 || this.drops >= 3 || this.seconds === 0) return null
+    this.charge = 0
+    this.drops++
+    this.baseline = { ...census }
+    this.peakAir = census.airborne
+    this.impactUntil = this.clock + IMPACT_SECONDS
+    this.banked = this.score
+    this.result = { grade: gradeTiming(offset), points: 0, drop: this.drops }
+    this.observe(census)
+    return this.result
   }
-  drop() {
-    if (!this.active || this.charge < 1) return false
-    this.charge = 0; this.drops++; this.score += 1000
-    if (this.drops === 3) { this.active = false; this.finished = true }
-    return true
+
+  /** Call a few times a second; while a drop is being scored, its points climb with the damage. */
+  observe(census: Census) {
+    if (!this.result || !this.baseline || this.clock > this.impactUntil + .01) return
+    const b = this.baseline
+    this.peakAir = Math.max(this.peakAir, census.airborne)
+    const impact =
+      Math.max(0, b.bricks - census.bricks) * 2 +
+      Math.max(0, census.gravel - b.gravel) +
+      Math.max(0, b.bombs - census.bombs) * 150 +
+      Math.max(0, census.flowers - b.flowers) * 4 +
+      Math.max(0, this.peakAir - b.airborne) * .25
+    const scale = REFERENCE_CELLS / (census.cells ?? REFERENCE_CELLS)
+    this.result.points = Math.round((BASE_POINTS + impact * scale) * this.result.grade.multiplier)
+    this.score = this.banked + this.result.points
   }
 }
