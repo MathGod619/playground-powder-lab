@@ -68,6 +68,8 @@ export function App() {
   const [rave, setRave] = useState({ active: false, finished: false, charge: 0, drops: 0, score: 0, seconds: 90, scoring: false })
   const [result, setResult] = useState<DropResult | null>(null)
   const [menu, setMenu] = useState<'none' | 'scenes' | 'rec'>('none')
+  const [fullscreen, setFullscreen] = useState(false)
+  const canFullscreen = typeof document !== 'undefined' && !!document.fullscreenEnabled
   /** Last kick and beat length, on the same clock the drop button is read against. */
   const beat = useRef({ last: -Infinity, period: 0 })
   const session = useRef(new RaveSession())
@@ -257,6 +259,19 @@ export function App() {
     return () => { cancelAnimationFrame(frame); removeEventListener('resize', layout); audio.stop() }
   }, [])
 
+  // Full screen: the browser fires a resize, which re-lays-out the world to fill the screen.
+  useEffect(() => {
+    const sync = () => setFullscreen(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', sync)
+    return () => document.removeEventListener('fullscreenchange', sync)
+  }, [])
+
+  function toggleFullscreen() {
+    if (!document.fullscreenEnabled) { say('Full screen is not available in this browser. Try adding the page to your home screen.'); return }
+    if (document.fullscreenElement) void document.exitFullscreen()
+    else document.documentElement.requestFullscreen().catch(() => say('The browser blocked full screen.'))
+  }
+
   // Keyboard
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -270,6 +285,7 @@ export function App() {
       else if (key === ' ') { e.preventDefault(); setPaused(p => !p) }
       else if (key === 'd') triggerDrop()
       else if (key === 'r') loadScene(world.current.scene)
+      else if (key === 'f') toggleFullscreen()
       else if (key === 'escape') { setMixOpen(false); setMenu('none') }
     }
     addEventListener('keydown', onKey)
@@ -609,6 +625,15 @@ export function App() {
         <button className="tool" title="Bigger brush (])" onClick={() => setBrush(b => Math.min(MAX_BRUSH, b + 1))}>+</button>
         <button className="tool" title={paused ? 'Resume (Space)' : 'Freeze (Space)'} onClick={() => setPaused(p => !p)}>{paused ? '▶' : '❚❚'}</button>
         <button className="tool" title="Reset scene (R)" onClick={() => loadScene(scene)}>↺</button>
+        {canFullscreen && (
+          <button className="tool" title={fullscreen ? 'Exit full screen (F)' : 'Full screen (F)'} aria-pressed={fullscreen} onClick={toggleFullscreen}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              {fullscreen
+                ? <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
+                : <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />}
+            </svg>
+          </button>
+        )}
         <i className="sep" />
       </nav>
 

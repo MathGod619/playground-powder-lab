@@ -41,7 +41,7 @@ Explosions smash walls, brick and speakers into gravel and throw everything else
 
 - Paint by dragging. Right-click erases.
 - **1–0** pick materials, **C** brick, **G** powder, **B** bomb, **V** cloud, **X** blast, **E** erase, **[ ]** or scroll wheel change brush size.
-- **Space** freezes the world while the music keeps playing. **R** resets the scene. **D** forces a drop.
+- **Space** freezes the world while the music keeps playing. **R** resets the scene. **D** forces a drop. **F** (or the ⛶ button in the dock) toggles full screen.
 - **Clip** opens a menu: record 10 seconds now, or **Catch the next drop**, which arms a recording that starts during the build-up (or 5 s before a mapped drop) and ends 6 s after the drop, so the clip is built around the drop. When it's done you can watch it, download it (MP4 where the browser supports it, otherwise WebM), or share it.
 - The world name at the top left opens the world list.
 - **Mix** has sliders for each reaction, atmosphere, glow and beat sensitivity (raise it for a quiet mic), the world detail level (Chunky / Normal / Fine), and Save / Load / Export / Import.
