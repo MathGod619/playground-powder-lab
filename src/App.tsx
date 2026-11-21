@@ -3,6 +3,8 @@ import type { ChangeEvent, CSSProperties, DragEvent, PointerEvent as ReactPointe
 import { MapPlayer } from './analysis.ts'
 import { AudioEngine, type SourceMode } from './audio.ts'
 import { BeatDetector } from './detector.ts'
+import { Director } from './Director.tsx'
+import type { ScenePlan } from './director-plan.ts'
 import { automaticDrops, beatOffset, MusicEnvelope, RaveSession, type DropResult } from './immersion.ts'
 import { drawAtmosphere } from './atmosphere.ts'
 import { fitSize, IMAGE_MODES, removeBackground, stampImage, type ImageMode, type Pixels } from './image.ts'
@@ -70,6 +72,10 @@ export function App() {
   const [result, setResult] = useState<DropResult | null>(null)
   const [menu, setMenu] = useState<'none' | 'scenes' | 'rec'>('none')
   const [fullscreen, setFullscreen] = useState(false)
+  const [directorOpen, setDirectorOpen] = useState(false)
+  const [canDirectorUndo, setCanDirectorUndo] = useState(false)
+  const imageBounds = useRef<{ world: World; x: number; y: number; w: number; h: number } | null>(null)
+  const directorUndo = useRef<{ world: World; settings: Settings; image: typeof imageBounds.current } | null>(null)
   /** An uploaded picture waiting to be placed. */
   const [placing, setPlacing] = useState<{ name: string; source: CanvasImageSource; width: number; height: number } | null>(null)
   const [imgMode, setImgMode] = useState<ImageMode>('statue')
@@ -349,6 +355,7 @@ export function App() {
     if (!g) return
     const { x, y } = ghostOrigin()
     const placed = stampImage(world.current, g.pixels, x, y, imgMode)
+    if (placed) imageBounds.current = { world: world.current, x: x / world.current.width, y: y / world.current.height, w: g.pixels.width / world.current.width, h: g.pixels.height / world.current.height }
     setPlacing(null)
     if (!placed) { say('Nothing landed. Try moving it onto the screen or turning off Cut background.'); return }
     say({
@@ -378,7 +385,7 @@ export function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (live.current.splash || e.metaKey || e.ctrlKey || e.altKey) return
-      if ((e.target as HTMLElement)?.closest?.('input')) return
+      if ((e.target as HTMLElement)?.closest?.('input, textarea, select, [contenteditable]')) return
       const key = e.key.toLowerCase()
       if (live.current.placing) {
         if (key === 'escape') setPlacing(null)
@@ -495,6 +502,7 @@ export function App() {
   }
 
   function startRave() {
+    setDirectorOpen(false)
     const w = makeWorld(live.current.settings.size, world.current.scene)
     install(w)
     session.current.start()
@@ -611,6 +619,33 @@ export function App() {
 
   const activePad = PADS.find(p => p.tool === tool)
 
+  function directorContext() {
+    const w = world.current, bounds = imageBounds.current
+    return { scene: w.scene, width: w.width, height: w.height, gravity: w.rules.gravity, hue: w.hue,
+      reactions: live.current.settings.reactions,
+      imageBounds: bounds?.world === w ? { x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h } : null }
+  }
+
+  function applyDirector(next: World, plan: ScenePlan) {
+    if (session.current.active || session.current.finished) { say('Return to Sandbox to use the Director.'); return }
+    directorUndo.current = { world: world.current, settings: live.current.settings, image: imageBounds.current }
+    if (plan.scene) imageBounds.current = null
+    else if (imageBounds.current?.world === world.current) imageBounds.current = { ...imageBounds.current, world: next }
+    const changes = plan.environment
+    setSettings(s => ({ ...s, reactions: { kick: changes.kick ?? s.reactions.kick, speakers: changes.speakers ?? s.reactions.speakers,
+      sparks: changes.sparks ?? s.reactions.sparks, slosh: changes.slosh ?? s.reactions.slosh } }))
+    install(next)
+    setCanDirectorUndo(true)
+    say('Director applied: ' + plan.title)
+  }
+
+  function undoDirector() {
+    const previous = directorUndo.current
+    if (!previous || session.current.active || session.current.finished) return
+    install(previous.world); setSettings(previous.settings); imageBounds.current = previous.image
+    directorUndo.current = null; setCanDirectorUndo(false)
+  }
+
   return (
     <div className="app" onDragOver={e => { e.preventDefault(); setDragging(true) }}
       onDragLeave={e => { if (!e.relatedTarget) setDragging(false) }} onDrop={onDrop}>
@@ -631,6 +666,10 @@ export function App() {
       <header className="hud top">
         <div className="brand">
           <div className="logo">POWDER<b>RAVE</b></div>
+          <button className={`chip ${directorOpen ? 'on' : ''}`} aria-expanded={directorOpen} onClick={() => {
+            if (session.current.active || session.current.finished) { say('Return to Sandbox to use the Director.'); return }
+            setDirectorOpen(o => !o); setMixOpen(false); setMenu('none')
+          }}>Director</button>
           <div className="chips">
             <div className="menu-wrap">
               <button className={`chip scene-btn ${menu === 'scenes' ? 'on' : ''}`} aria-expanded={menu === 'scenes'}
@@ -793,6 +832,8 @@ export function App() {
           )}
         </div>
       )}
+      {directorOpen && !splash && <Director getWorld={() => world.current} context={directorContext} apply={applyDirector}
+        undo={undoDirector} canUndo={canDirectorUndo && !rave.active && !rave.finished} close={() => setDirectorOpen(false)} />}
       {activePad && !splash && <div className="hint" key={activePad.name}>{activePad.hint}</div>}
       {drops > 0 && <div className="drop-text" key={drops}>DROP</div>}
       {countdown !== null && <div className="countdown" key={countdown}>DROP IN <b>{countdown}</b></div>}

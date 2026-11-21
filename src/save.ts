@@ -41,6 +41,7 @@ export function encodeWorld(world: World) {
     craterY: world.craterY,
     marks: world.marks,
     hue: world.hue,
+    physics: { gravity: world.rules.gravity, fall: world.rules.fall, wind: world.directorWind },
     type: toBase64(type),
     life: toBase64(life),
     color: toBase64(new Uint8Array(color.buffer)),
@@ -71,5 +72,13 @@ export function decodeWorld(json: string) {
     world.marks = data.marks.slice(0, 64).filter(m => Number.isFinite(m?.x) && Number.isFinite(m?.y)).map(m => ({ x: +m.x, y: +m.y }))
   }
   world.hue = Number(data.hue) || 300
+  if (data.physics && typeof data.physics === 'object') {
+    const p = data.physics as Record<string, unknown>
+    if (typeof p.gravity !== 'number' || !Number.isFinite(p.gravity) || p.gravity < .05 || p.gravity > 2 ||
+      typeof p.fall !== 'number' || !Number.isFinite(p.fall) || p.fall < .05 || p.fall > 1 ||
+      typeof p.wind !== 'number' || !Number.isFinite(p.wind) || Math.abs(p.wind) > 1) throw new Error('Invalid world physics.')
+    world.rules = { ...world.rules, gravity: p.gravity, fall: p.fall }
+    world.directorWind = p.wind
+  }
   return world
 }

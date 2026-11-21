@@ -198,6 +198,20 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 
 /* ---- image placement ---- */
 .tool.on { background: rgba(255, 255, 255, .12); color: var(--ink) }
+.director-panel { position: fixed; top: 140px; left: 16px; bottom: 100px; z-index: 8; width: min(390px, calc(100vw - 32px)); overflow-y: auto; overscroll-behavior: contain; padding: 18px; border-radius: 18px; background: rgba(14,10,24,.95); border: 1px solid var(--line); backdrop-filter: blur(14px); box-shadow: 0 20px 60px #0008; display: flex; flex-direction: column; gap: 14px; font-size: 16px; user-select: text }
+.director-heading { display: flex; justify-content: space-between; align-items: center; font-size: 20px }
+.director-heading button { min-width: 32px; min-height: 32px }
+.director-panel p, .director-panel small { font-size: 14px; line-height: 1.45; color: var(--dim); overflow-wrap: anywhere }
+.director-panel label { display: flex; flex-direction: column; gap: 6px; font-size: 14px }
+.director-panel input, .director-panel textarea { font: inherit; font-size: 16px; width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 10px; color: var(--ink); background: #ffffff09; user-select: text }
+.director-panel textarea { resize: vertical; min-height: 90px }
+.director-panel details > * { margin-top: 10px }
+.director-panel summary { cursor: pointer; font-size: 14px }
+.director-panel .chip, .director-panel .seg button { font-size: 14px; min-height: 36px }
+.director-panel button:disabled { opacity: .4; cursor: default }
+.director-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px }
+.director-preview { width: 100%; height: auto; max-height: 230px; object-fit: contain; margin: 10px 0; background: #06050a; border: 1px dashed var(--accent); border-radius: 10px; opacity: .8; image-rendering: pixelated }
+.director-template { display: block; width: 100%; text-align: left; padding: 10px; border-bottom: 1px solid var(--line); font-size: 14px }
 .placer { position: fixed; left: 16px; bottom: 100px; z-index: 7; width: min(360px, calc(100vw - 24px)); padding: 12px; border-radius: 16px; background: rgba(14, 10, 24, .9); border: 1px solid var(--line); backdrop-filter: blur(16px); display: flex; flex-direction: column; gap: 8px; box-shadow: 0 20px 50px rgba(0, 0, 0, .5) }
 .placer-title { display: flex; flex-direction: column; gap: 2px }
 .placer-title b { font-family: Unbounded, sans-serif; font-weight: 900; font-size: 14px }

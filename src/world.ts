@@ -70,6 +70,7 @@ export class World {
   marks: { x: number; y: number }[] = []
   craterY = 0
   slosh = 0
+  directorWind = 0
   energy: Energy = { bass: 0, mid: 0, treble: 0, level: 0 }
   dropTicks = 0
   pressure = 0
@@ -237,7 +238,7 @@ export class World {
       } else {
         this.vy[k] += .13 * rules.gravity * (this.scene === 'moon' ? 1 - this.energy.bass * .7 : 1) * (wet ? .3 : 1); this.vx[k] *= .996
       }
-      this.vx[k] += Math.sin(this.frame * .012) * this.energy.mid * .012 * this.continuousReactions.slosh
+      this.vx[k] += (Math.sin(this.frame * .012) * this.energy.mid * .012 + this.directorWind * .02) * this.continuousReactions.slosh
       if (wet) { this.vx[k] *= .9; this.vy[k] *= .9 }
       const ghost = this.pGhost[k] > 0
       if (ghost) this.pGhost[k]--
