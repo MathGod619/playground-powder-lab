@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ChangeEvent, CSSProperties, DragEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { MapPlayer } from './analysis.ts'
 import { AudioEngine, type SourceMode } from './audio.ts'
 import { BeatDetector } from './detector.ts'
+import { CONTROL, Controller } from './controller.ts'
 import { Director } from './Director.tsx'
 import type { ScenePlan } from './director-plan.ts'
 import { automaticDrops, beatOffset, MusicEnvelope, RaveSession, type DropResult } from './immersion.ts'
 import { drawAtmosphere } from './atmosphere.ts'
-import { fitSize, IMAGE_MODES, removeBackground, stampImage, type ImageMode, type Pixels } from './image.ts'
+import { coverCrop, fitSize, IMAGE_MODES, removeBackground, stampImage, type ImageMode, type Pixels } from './image.ts'
 import { BLAST, isClickTool, isSolidTool, M, PADS, type Tool } from './materials.ts'
 import { ClipRecorder, canRecord, type Clip } from './recorder.ts'
 import { blastRadius, createRenderer, drawOverlay, type View } from './render.ts'
@@ -17,6 +18,7 @@ import { readLocal, writeLocal } from './storage.ts'
 import { DEFAULT_REACTIONS, World, type Reactions, type SceneId } from './world.ts'
 
 type Settings = { reactions: Reactions; glow: number; sensitivity: number; size: WorldSize; atmosphere: number }
+type Cell = { x: number; y: number }
 const SETTINGS_KEY = 'powder-rave-settings-v1'
 const DEFAULT_SETTINGS: Settings = { reactions: DEFAULT_REACTIONS, glow: 1, sensitivity: 1, size: 'medium', atmosphere: 1 }
 const MAX_BRUSH = 30
@@ -70,19 +72,23 @@ export function App() {
   const [dropReady, setDropReady] = useState(false)
   const [rave, setRave] = useState({ active: false, finished: false, charge: 0, drops: 0, score: 0, seconds: 90, scoring: false })
   const [result, setResult] = useState<DropResult | null>(null)
-  const [menu, setMenu] = useState<'none' | 'scenes' | 'rec'>('none')
+  const [menu, setMenu] = useState<'none' | 'scenes' | 'rec' | 'controller'>('none')
   const [fullscreen, setFullscreen] = useState(false)
+  const [controllerConnected, setControllerConnected] = useState(false)
   const [directorOpen, setDirectorOpen] = useState(false)
   const [canDirectorUndo, setCanDirectorUndo] = useState(false)
   const imageBounds = useRef<{ world: World; x: number; y: number; w: number; h: number } | null>(null)
   const directorUndo = useRef<{ world: World; settings: Settings; image: typeof imageBounds.current } | null>(null)
   /** An uploaded picture waiting to be placed. */
-  const [placing, setPlacing] = useState<{ name: string; source: CanvasImageSource; width: number; height: number } | null>(null)
+  const [placing, setPlacing] = useState<ImageBitmap | null>(null)
   const [imgMode, setImgMode] = useState<ImageMode>('statue')
   const [cutBg, setCutBg] = useState(true)
+  const [cutFullBg, setCutFullBg] = useState(false)
   const [imgWidth, setImgWidth] = useState(120)
+  const [fillScreen, setFillScreen] = useState(false)
+  const [gridSize, setGridSize] = useState({ width: 0, height: 0 })
   /** The placement preview, downsampled to world cells. */
-  const ghost = useRef<{ canvas: HTMLCanvasElement; pixels: Pixels } | null>(null)
+  const ghost = useRef<{ canvas: HTMLCanvasElement; pixels: Pixels; fullScreen: boolean } | null>(null)
   const imagePicker = useRef<HTMLInputElement>(null)
   const canFullscreen = typeof document !== 'undefined' && !!document.fullscreenEnabled
   /** Last kick and beat length, on the same clock the drop button is read against. */
@@ -92,6 +98,7 @@ export function App() {
   const sky = useRef<HTMLCanvasElement>(null)
 
   const stage = useRef<HTMLDivElement>(null)
+  const dock = useRef<HTMLElement>(null)
   const layer = useRef<HTMLDivElement>(null)
   const base = useRef<HTMLCanvasElement>(null)
   const glow = useRef<HTMLCanvasElement>(null)
@@ -111,10 +118,11 @@ export function App() {
   const world = useRef<World>(null!)
   const draw = useRef<() => void>(() => {})
   const view = useRef<View>({ x: 0, y: 0, scale: 1 })
-  const live = useRef({ tool, brush, paused, settings, splash, armed, placing: !!placing })
-  live.current = { tool, brush, paused, settings, splash, armed, placing: !!placing }
-  const stroke = useRef<{ id: number; erase: boolean; last: { x: number; y: number } } | null>(null)
-  const cursor = useRef<{ sx: number; sy: number } | null>(null)
+  const controllerBlocked = splash || directorOpen || !!clip || dragging
+  const live = useRef({ tool, brush, paused, settings, splash, armed, placing: !!placing, controllerBlocked })
+  live.current = { tool, brush, paused, settings, splash, armed, placing: !!placing, controllerBlocked }
+  const stroke = useRef<{ id: number; erase: boolean; last: Cell } | null>(null)
+  const cursor = useRef<{ sx: number; sy: number; controller?: true } | null>(null)
 
   const say = (text: string) => setToast(t => ({ text, id: t.id + 1 }))
 
@@ -147,6 +155,7 @@ export function App() {
     world.current = next
     draw.current = createRenderer(next, base.current!, glow.current!, bloom.current!)
     setScene(next.scene)
+    setGridSize({ width: next.width, height: next.height })
     layout()
   }
 
@@ -183,8 +192,83 @@ export function App() {
     const root = document.documentElement
     const fx = overlay.current!.getContext('2d')!
     const sctx = spec.current!.getContext('2d')!
+    const controller = new Controller()
+    let connected = false
+    let controllerStroke: { world: World; last: Cell; erase: boolean } | null = null
+    const suspendController = () => {
+      controller.suspend()
+      controllerStroke = null
+      if (cursor.current?.controller) cursor.current = null
+    }
+    addEventListener('blur', suspendController)
     let frame = 0, acc = 0, prev = performance.now(), shownBpm = 0, shownCount: number | null = null, shownRec = 0, lastStatus = 0
     recorder.onDone = c => { setClip(c); setRecording(0); catching.current = false }
+
+    function updateController(dt: number) {
+      const previousStroke = controllerStroke
+      controllerStroke = null
+      const { controllerBlocked, placing, tool, splash } = live.current
+      const blocked = controllerBlocked || !!stroke.current || !document.hasFocus()
+      const input = controller.read(blocked)
+      if (connected !== !!input) {
+        connected = !!input
+        setControllerConnected(connected)
+        if (!connected) setMenu(m => m === 'controller' ? 'none' : m)
+        else if (!splash) say('Controller connected. Press the Controller button to see the controls.')
+      }
+      if (!input || blocked) {
+        if (cursor.current?.controller) cursor.current = null
+        return
+      }
+
+      const { held, pressed, x, y } = input
+      const erase = !!(held & CONTROL.erase)
+      const paint = !!(held & CONTROL.paint)
+      const action = erase ? CONTROL.erase : CONTROL.paint
+      if (x || y || cursor.current?.controller || (!placing && (pressed & action))) {
+        const point = cursor.current ?? { sx: innerWidth / 2, sy: innerHeight / 2 }
+        const distance = Math.max(280, Math.min(innerWidth, innerHeight) * .75) * Math.min(dt, .05)
+        cursor.current = {
+          sx: Math.max(0, Math.min(innerWidth - 1, point.sx + x * distance)),
+          sy: Math.max(0, Math.min(innerHeight - 1, point.sy + y * distance)),
+          controller: true,
+        }
+      }
+
+      const size = Number(!!(pressed & CONTROL.grow)) - Number(!!(pressed & CONTROL.shrink))
+      if (placing) {
+        if (pressed & CONTROL.erase) setPlacing(null)
+        else if (pressed & CONTROL.paint) placeLatest.current()
+        else if (pressed & CONTROL.fullScreen) setFillScreen(full => !full)
+        else if (size) resizeImage(size * 8)
+        return
+      }
+
+      const cycle = Number(!!(pressed & CONTROL.nextTool)) - Number(!!(pressed & CONTROL.previousTool))
+      if (cycle) {
+        const index = PADS.findIndex(p => p.tool === tool)
+        const next = (index + cycle + PADS.length) % PADS.length
+        setTool(PADS[next].tool)
+        dock.current?.children[next]?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      }
+      if (size) setBrush(b => Math.max(1, Math.min(MAX_BRUSH, b + size)))
+      if (pressed & CONTROL.pause) setPaused(p => !p)
+      if ((pressed & CONTROL.drop) && !session.current.finished) triggerDrop()
+
+      const point = cursor.current
+      if ((!erase && !paint) || !point) return
+      const cell = toCell(point.sx, point.sy)
+      if (pressed & action) {
+        setMixOpen(false)
+        setMenu('none')
+        paintAt(cell, erase)
+      } else if (previousStroke?.world === world.current && previousStroke.erase === erase) {
+        const { last } = previousStroke
+        if ((cell.x !== last.x || cell.y !== last.y) && (erase || !isClickTool(tool))) paintLine(last, cell, erase)
+      } else return
+
+      if (erase || !isClickTool(tool)) controllerStroke = { world: world.current, last: cell, erase }
+    }
 
     const loop = (now: number) => {
       const w = world.current
@@ -222,10 +306,11 @@ export function App() {
         else if (!map && audio.mode !== 'tab' && !session.current.active && heard.breakdown) { recorder.start(20, stream); catching.current = true; setArmed(false) }
       }
 
+      updateController(dt)
       for (let n = 0; acc >= STEP_MS && n < 2; n++) {
         acc -= STEP_MS
         if (!paused) w.step()
-        const s = stroke.current
+        const s = stroke.current ?? controllerStroke
         if (s && (s.erase || (!isSolidTool(tool) && !isClickTool(tool)))) w.paint(s.last.x, s.last.y, brush, tool, s.erase)
       }
       if (acc > STEP_MS) acc = 0
@@ -273,7 +358,12 @@ export function App() {
     audio.onEnded = () => { setSource(null); say('Audio stopped. Pick another source.') }
     // Development-only handle for automated play-testing.
     if (import.meta.env.DEV) Object.assign(window, { __rave: { world: () => world.current, audio, recorder, step: (n: number) => { for (let k = 0; k < n; k++) world.current.step() }, draw: () => draw.current() } })
-    return () => { cancelAnimationFrame(frame); removeEventListener('resize', layout); audio.stop() }
+    return () => {
+      cancelAnimationFrame(frame)
+      removeEventListener('resize', layout)
+      removeEventListener('blur', suspendController)
+      audio.stop()
+    }
   }, [])
 
   // Full screen: the browser fires a resize, which re-lays-out the world to fill the screen.
@@ -291,27 +381,34 @@ export function App() {
 
   // ---------------------------------------------------------------- images
 
+  const cutImageBackground = fillScreen ? cutFullBg : cutBg
+  useEffect(() => () => placing?.close(), [placing])
+
   /** Rebuild the placement preview whenever the picture, size or background option changes. */
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!placing) { ghost.current = null; return }
-    const { width, height } = fitSize(placing.width, placing.height, imgWidth)
+    const { width, height } = fillScreen ? gridSize : fitSize(placing.width, placing.height, imgWidth)
     const canvas = document.createElement('canvas')
     canvas.width = width
     canvas.height = height
     const ctx = canvas.getContext('2d', { willReadFrequently: true })!
     ctx.imageSmoothingQuality = 'high'
-    ctx.drawImage(placing.source, 0, 0, width, height)
+    if (fillScreen) {
+      const crop = coverCrop(placing.width, placing.height, width, height)
+      ctx.drawImage(placing, crop.x, crop.y, crop.width, crop.height, 0, 0, width, height)
+    } else ctx.drawImage(placing, 0, 0, width, height)
     let pixels: Pixels = ctx.getImageData(0, 0, width, height)
-    if (cutBg) {
+    if (cutImageBackground) {
       pixels = removeBackground(pixels)
       ctx.putImageData(new ImageData(new Uint8ClampedArray(pixels.data), width, height), 0, 0)
     }
-    ghost.current = { canvas, pixels }
-  }, [placing, imgWidth, cutBg])
+    ghost.current = { canvas, pixels, fullScreen: fillScreen }
+  }, [placing, imgWidth, fillScreen, gridSize, cutImageBackground])
 
   /** Where the preview sits: centred on the pointer, or the middle of the world before the pointer moves. */
   function ghostOrigin() {
     const g = ghost.current!, w = world.current, c = cursor.current
+    if (g.fullScreen) return { x: 0, y: 0 }
     const cx = c ? (c.sx - view.current.x) / view.current.scale : w.width / 2
     const cy = c ? (c.sy - view.current.y) / view.current.scale : w.height / 2
     return { x: Math.round(cx - g.pixels.width / 2), y: Math.round(cy - g.pixels.height / 2) }
@@ -341,7 +438,8 @@ export function App() {
       // start at a size that fits comfortably: under half the width and 70% of the height
       const width = Math.round(Math.min(w.width * .45, w.height * .7 * bitmap.width / bitmap.height))
       setImgWidth(Math.max(12, width))
-      setPlacing({ name: file.name, source: bitmap, width: bitmap.width, height: bitmap.height })
+      setFillScreen(false)
+      setPlacing(bitmap)
       setMixOpen(false)
       setMenu('none')
       setSplash(false)
@@ -365,11 +463,14 @@ export function App() {
     }[imgMode])
   }
 
-  /** The latest placeImage, for the keyboard handler (which is registered once). */
+  /** The latest placement action for the keyboard and controller handlers. */
   const placeLatest = useRef(placeImage)
   placeLatest.current = placeImage
 
-  const resizeImage = (delta: number) => setImgWidth(v => Math.max(12, Math.min(world.current?.width ?? 400, v + delta)))
+  function resizeImage(delta: number) {
+    setFillScreen(false)
+    setImgWidth(v => Math.max(12, Math.min(world.current?.width ?? 400, v + delta)))
+  }
 
   // Paste an image from the clipboard (Cmd/Ctrl+V).
   useEffect(() => {
@@ -391,7 +492,7 @@ export function App() {
         if (key === 'escape') setPlacing(null)
         else if (key === '[' || key === '-') resizeImage(-6)
         else if (key === ']' || key === '=') resizeImage(6)
-        else if (key === 'enter') placeLatest.current()
+        else if (key === 'enter' && !(e.target instanceof HTMLElement && e.target.closest('button'))) placeLatest.current()
         return
       }
       if (key === 'i') { imagePicker.current?.click(); return }
@@ -557,12 +658,21 @@ export function App() {
 
   // ---------------------------------------------------------------- painting
 
-  const toCell = (e: { clientX: number; clientY: number }) => ({
-    x: Math.floor((e.clientX - view.current.x) / view.current.scale),
-    y: Math.floor((e.clientY - view.current.y) / view.current.scale),
+  const toCell = (x: number, y: number) => ({
+    x: Math.floor((x - view.current.x) / view.current.scale),
+    y: Math.floor((y - view.current.y) / view.current.scale),
   })
 
-  function paintLine(from: { x: number; y: number }, to: { x: number; y: number }, erase: boolean) {
+  function paintAt(cell: Cell, erase: boolean) {
+    const { brush, tool } = live.current
+    if (!erase && isClickTool(tool)) {
+      if (tool === BLAST) world.current.blast(cell.x, cell.y, blastRadius(brush), .8 + brush / 25, true)
+      else if (!world.current.placeBomb(cell.x, cell.y)) say('No room for a bomb there.')
+    } else world.current.paint(cell.x, cell.y, brush, tool, erase)
+  }
+
+  function paintLine(from: Cell, to: Cell, erase: boolean) {
+    const { brush, tool } = live.current
     const d = Math.max(Math.abs(to.x - from.x), Math.abs(to.y - from.y))
     const steps = Math.max(1, d / Math.max(1, brush * .5) | 0)
     for (let k = 0; k <= steps; k++) {
@@ -581,22 +691,16 @@ export function App() {
       else placeImage()
       return
     }
-    const cell = toCell(e)
-    if (e.button === 0 && isClickTool(tool)) {
-      if (tool === BLAST) world.current.blast(cell.x, cell.y, blastRadius(brush), .8 + brush / 25, true)
-      else if (!world.current.placeBomb(cell.x, cell.y)) say('No room for a bomb there.')
-      return
-    }
-    stroke.current = { id: e.pointerId, erase: e.button === 2, last: cell }
-    cursor.current = { sx: e.clientX, sy: e.clientY }
-    if (!isClickTool(tool) || e.button === 2) world.current.paint(cell.x, cell.y, brush, tool, e.button === 2)
+    const cell = toCell(e.clientX, e.clientY), erase = e.button === 2
+    if (erase || !isClickTool(tool)) stroke.current = { id: e.pointerId, erase, last: cell }
+    paintAt(cell, erase)
   }
 
   function onPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
     cursor.current = { sx: e.clientX, sy: e.clientY }
     const s = stroke.current
     if (!s || s.id !== e.pointerId) return
-    const cell = toCell(e)
+    const cell = toCell(e.clientX, e.clientY)
     if (!isClickTool(tool) || s.erase) paintLine(s.last, cell, s.erase)
     s.last = cell
   }
@@ -651,7 +755,7 @@ export function App() {
       onDragLeave={e => { if (!e.relatedTarget) setDragging(false) }} onDrop={onDrop}>
       <div ref={stage} className="stage" onPointerDown={onPointerDown} onPointerMove={onPointerMove}
         onPointerUp={endStroke} onPointerCancel={endStroke}
-        onPointerLeave={e => { if (!stroke.current && e.pointerType === 'mouse') cursor.current = null }}
+        onPointerLeave={e => { if (!stroke.current && !cursor.current?.controller && e.pointerType === 'mouse') cursor.current = null }}
         onContextMenu={e => e.preventDefault()}
         onWheel={e => placing ? resizeImage(e.deltaY < 0 ? 4 : -4) : setBrush(b => Math.max(1, Math.min(MAX_BRUSH, b + (e.deltaY < 0 ? 1 : -1))))}>
         <canvas ref={sky} className={`atmosphere ${scene === 'sea' ? 'underwater' : ''}`} />
@@ -691,6 +795,19 @@ export function App() {
               <button className={!rave.active && !rave.finished ? 'on' : ''} onClick={leaveRave}>Sandbox</button>
               <button className={rave.active || rave.finished ? 'on' : ''} onClick={startRave}>Rave</button>
             </div>
+            {controllerConnected && (
+              <div className="menu-wrap">
+                <button className={`chip ${menu === 'controller' ? 'on' : ''}`} aria-expanded={menu === 'controller'}
+                  onClick={() => { setMenu(m => m === 'controller' ? 'none' : 'controller'); setMixOpen(false) }}>Controller</button>
+                {menu === 'controller' && (
+                  <section className="menu controller-help" aria-label="Controller controls">
+                    <p><b>Left stick</b> aim · <b>LB/RB or L1/R1</b> switch tools</p>
+                    <p><b>A/Cross or RT/R2</b> paint · <b>B/Circle or LT/L2</b> erase</p>
+                    <p><b>D-pad up/down</b> resize · <b>X/Square</b> drop · <b>Start/Options</b> freeze</p>
+                  </section>
+                )}
+              </div>
+            )}
           </div>
         </div>
         <div className="deck">
@@ -769,7 +886,7 @@ export function App() {
         </div>
       </header>
 
-      <nav className="hud dock">
+      <nav ref={dock} className="hud dock">
         {PADS.map(p => (
           <button key={p.tool} className={`pad ${tool === p.tool ? 'on' : ''}`} style={{ '--c': p.swatch } as CSSProperties}
             title={`${p.name} (${p.key}): ${p.hint}`} onClick={() => setTool(p.tool)}>
@@ -859,7 +976,12 @@ export function App() {
       }} />
       {placing && (
         <section className="placer" aria-label="Place image">
-          <div className="placer-title"><b>Click to drop it in</b><span>Scroll or [ ] to resize · right-click or Esc to cancel</span></div>
+          <div className="placer-title">
+            <b>{fillScreen ? 'Full-screen preview' : 'Click to drop it in'}</b>
+            <span>{controllerConnected
+              ? 'A/Cross to place · B/Circle to cancel · Y/Triangle for full screen'
+              : fillScreen ? 'Centered and cropped to fill the playfield' : 'Scroll or [ ] to resize · right-click or Esc to cancel'}</span>
+          </div>
           <div className="seg">
             {IMAGE_MODES.map(m => (
               <button key={m.id} className={imgMode === m.id ? 'on' : ''} title={m.detail} onClick={() => setImgMode(m.id)}>{m.name}</button>
@@ -867,12 +989,20 @@ export function App() {
           </div>
           <small className="placer-detail">{IMAGE_MODES.find(m => m.id === imgMode)!.detail}</small>
           <div className="placer-row">
-            <label className="check"><input type="checkbox" checked={cutBg} onChange={e => setCutBg(e.target.checked)} /> Cut background</label>
-            <span className="placer-size">
-              <button className="tool" aria-label="Smaller" onClick={() => resizeImage(-8)}>−</button>
-              <span>{imgWidth}</span>
-              <button className="tool" aria-label="Bigger" onClick={() => resizeImage(8)}>+</button>
-            </span>
+            <label className="check"><input type="checkbox" checked={cutImageBackground}
+              onChange={e => (fillScreen ? setCutFullBg : setCutBg)(e.target.checked)} /> Cut background</label>
+            {!fillScreen && (
+              <span className="placer-size">
+                <button className="tool" aria-label="Smaller" onClick={() => resizeImage(-8)}>−</button>
+                <span>{imgWidth}</span>
+                <button className="tool" aria-label="Bigger" onClick={() => resizeImage(8)}>+</button>
+              </span>
+            )}
+          </div>
+          <div className="placer-row placer-actions">
+            <button className={`chip ${fillScreen ? 'on' : ''}`} aria-pressed={fillScreen}
+              onClick={() => setFillScreen(full => !full)}>Full Screen</button>
+            {fillScreen && <button className="chip on" onClick={placeImage}>Place image</button>}
             <button className="chip" onClick={() => setPlacing(null)}>Cancel</button>
           </div>
         </section>
@@ -889,7 +1019,7 @@ export function App() {
             <h1>POWDER<br />RAVE</h1>
             <p>A falling-sand world that hears your music. Kicks make the ground jump, speakers blast the dirt around, and the drop sets everything off.</p>
             <button className="start" onClick={start}>DROP THE BEAT</button>
-            <small>Sound on. You can also drag any audio file onto the page.</small>
+            <small>{controllerConnected ? 'Controller connected. Start the game to play.' : 'Sound on. You can also drag any audio file onto the page.'}</small>
           </div>
         </div>
       )}

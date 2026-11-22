@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { elementFor, fitSize, removeBackground, stampImage } from '../src/image.ts'
+import { coverCrop, elementFor, fitSize, removeBackground, stampImage } from '../src/image.ts'
 import { M } from '../src/materials.ts'
 import { World } from '../src/world.ts'
 import { pack } from '../src/color.ts'
@@ -111,4 +111,10 @@ test('fitSize keeps the aspect ratio', () => {
   assert.deepEqual(fitSize(1600, 900, 160), { width: 160, height: 90 })
   assert.deepEqual(fitSize(300, 600, 50), { width: 50, height: 100 })
   assert.equal(fitSize(10, 10, 1).width, 4, 'never vanishingly small')
+})
+
+test('full-screen images crop around the center and cover the world at its aspect ratio', () => {
+  assert.deepEqual(coverCrop(900, 1600, 320, 180), { x: 0, y: 546.875, width: 900, height: 506.25 })
+  assert.deepEqual(coverCrop(1600, 900, 180, 320), { x: 546.875, y: 0, width: 506.25, height: 900 })
+  assert.deepEqual(coverCrop(1600, 900, 320, 180), { x: 0, y: 0, width: 1600, height: 900 })
 })

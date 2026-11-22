@@ -45,10 +45,13 @@ Explosions smash walls, brick and speakers into gravel and throw everything else
 - **Clip** opens a menu: record 10 seconds now, or **Catch the next drop**, which arms a recording that starts during the build-up (or 5 s before a mapped drop) and ends 6 s after the drop, so the clip is built around the drop. When it's done you can watch it, download it (MP4 where the browser supports it, otherwise WebM), or share it.
 - The world name at the top left opens the world list.
 - **Mix** has sliders for each reaction, atmosphere, glow and beat sensitivity (raise it for a quiet mic), the world detail level (Chunky / Normal / Fine), and Save / Load / Export / Import.
+- Connect a standard controller over USB or Bluetooth, then press a button with the game tab focused. Use the **left stick** to aim, **A / Cross** or **RT / R2** to paint, **B / Circle** or **LT / L2** to erase, and the bumpers to cycle tools. **D-pad up/down** changes brush size, **X / Square** triggers a drop, and **Start / Options** freezes or resumes the world.
 
 ## Drop in your own images
 
 Drag a picture onto the page, paste one (⌘V / Ctrl+V), press **I**, or use the picture button in the dock. A preview follows your pointer: scroll or **[ ]** to resize, then click (or **Enter**) to drop it in. Right-click or **Esc** cancels. **Cut background** removes a plain backdrop from photos; transparent PNGs come in clean either way.
+
+Choose **Full Screen** to center-crop the image across the playfield, then **Place image**. Full-screen previews keep the background by default. On a controller, **Y / Triangle** toggles full-screen placement, **A / Cross** places the image, and **B / Circle** cancels.
 
 Pick what the picture is made of:
 

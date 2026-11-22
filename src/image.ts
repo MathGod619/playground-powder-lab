@@ -117,3 +117,10 @@ export function fitSize(imageWidth: number, imageHeight: number, widthCells: num
   const w = Math.max(4, Math.round(widthCells))
   return { width: w, height: Math.max(1, Math.round(w * imageHeight / imageWidth)) }
 }
+
+/** Center-crop the source to cover the world without stretching or allocating off-screen pixels. */
+export function coverCrop(imageWidth: number, imageHeight: number, width: number, height: number) {
+  const scale = Math.max(width / imageWidth, height / imageHeight)
+  const cropWidth = Math.min(imageWidth, width / scale), cropHeight = Math.min(imageHeight, height / scale)
+  return { x: (imageWidth - cropWidth) / 2, y: (imageHeight - cropHeight) / 2, width: cropWidth, height: cropHeight }
+}
