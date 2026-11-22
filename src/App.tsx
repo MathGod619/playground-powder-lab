@@ -19,6 +19,7 @@ import { blastRadius, createRenderer, drawOverlay, type BrushCursor, type Cursor
 import { decodeWorld, encodeWorld, MAX_FILE_BYTES, SAVE_KEY } from './save.ts'
 import { buildScene, gridFor, SCENES, WORLD_SIZES, type WorldSize } from './scenes.ts'
 import { readLocal, writeLocal } from './storage.ts'
+import { COACH_STEPS, completeStep, currentStep, isNewPlayer, ONBOARDED_KEY, STARTER_TOOLS, stepForPaint, type CoachStep } from './onboarding.ts'
 import { DEFAULT_REACTIONS, World, type Reactions, type SceneId } from './world.ts'
 
 type Settings = { reactions: Reactions; glow: number; sensitivity: number; size: WorldSize; atmosphere: number; dropRumble: boolean }
@@ -62,6 +63,10 @@ const describe = (error: unknown) => error instanceof Error ? error.message : 'S
 export function App() {
   const [settings, setSettings] = useState(loadSettings)
   const [splash, setSplash] = useState(true)
+  // First-run guide: a new player sees a few tools and three steps that lead to their first drop.
+  const [starter, setStarter] = useState(() => isNewPlayer(localStorage, SETTINGS_KEY))
+  const [coachDone, setCoachDone] = useState<CoachStep[]>([])
+  const [allTools, setAllTools] = useState(false)
   const [tool, setTool] = useState<Tool>(M.Sand)
   const [brush, setBrush] = useState(6)
   const [secondTool, setSecondTool] = useState<Tool>(M.Glitter)
@@ -142,12 +147,34 @@ export function App() {
   const draw = useRef<() => void>(() => {})
   const view = useRef<View>({ x: 0, y: 0, scale: 1 })
   const controllerBlocked = directorOpen || !!clip || dragging
-  const live = useRef({ tool, brush, secondTool, secondBrush, paused, settings, splash, armed, placing: !!placing, controllerBlocked, controllerPage })
-  live.current = { tool, brush, secondTool, secondBrush, paused, settings, splash, armed, placing: !!placing, controllerBlocked, controllerPage }
+  const fewTools = starter && !allTools
+  const visiblePads = fewTools ? PADS.filter(pad => STARTER_TOOLS.includes(pad.tool)) : PADS
+  const live = useRef({ tool, brush, secondTool, secondBrush, paused, settings, splash, armed, placing: !!placing, controllerBlocked, controllerPage, starter, visiblePads })
+  live.current = { tool, brush, secondTool, secondBrush, paused, settings, splash, armed, placing: !!placing, controllerBlocked, controllerPage, starter, visiblePads }
   const stroke = useRef<(Stroke & { id: number }) | null>(null)
   const cursor = useRef<(Cursor & { controller?: number }) | null>(null)
 
   const say = (text: string) => setToast(t => ({ text, id: t.id + 1 }))
+
+  const coach = (step: CoachStep | null) => {
+    if (step && live.current.starter) setCoachDone(done => done.includes(step) ? done : completeStep(done, step))
+  }
+
+  function finishGuide(message?: string) {
+    setStarter(false); setAllTools(false); setCoachDone([])
+    try { localStorage.setItem(ONBOARDED_KEY, '1') } catch { /* storage unavailable */ }
+    if (message) say(message)
+  }
+
+  useEffect(() => {
+    if (starter && COACH_STEPS.every(step => coachDone.includes(step.id)))
+      finishGuide('That\'s the drop! Everything is unlocked: more materials, Rave mode, beat brushes, clips and the Mix.')
+  }, [coachDone])
+
+  // Picking a hidden tool by key or menu shows the whole dock.
+  useEffect(() => {
+    if (starter && !STARTER_TOOLS.includes(tool)) setAllTools(true)
+  }, [tool])
 
   useEffect(() => {
     if (!toast.text) return
@@ -210,7 +237,7 @@ export function App() {
       dropCheckpoint.current = { world: cloneWorld(current), image: image?.world === current ? image : null }
       setCanRetry(true)
     }
-    if (manual) lastManualDrop.current = performance.now()
+    if (manual) { lastManualDrop.current = performance.now(); coach('drop') }
     setDropReady(false)
     if (live.current.armed && !recorder.active && manual && canRecord()) {
       recorder.start(8, audio.recordStream()); setArmed(false)
@@ -361,11 +388,12 @@ export function App() {
         const { tool, brush } = i === 0 ? live.current : { tool: live.current.secondTool, brush: live.current.secondBrush }
         const cycle = Number(!!(pressed & CONTROL.nextTool)) - Number(!!(pressed & CONTROL.previousTool))
         if (cycle) {
-          const index = PADS.findIndex(p => p.tool === tool)
-          const next = (index + cycle + PADS.length) % PADS.length
+          const pads = live.current.visiblePads
+          const index = pads.findIndex(p => p.tool === tool)
+          const next = pads[(index + cycle + pads.length) % pads.length]
           const selectTool = i === 0 ? setTool : setSecondTool
-          selectTool(PADS[next].tool)
-          if (i === 0) dock.current?.children[next]?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+          selectTool(next.tool)
+          if (i === 0) dock.current?.children[PADS.indexOf(next)]?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
         }
         const size = Number(!!(pressed & CONTROL.grow)) - Number(!!(pressed & CONTROL.shrink))
         if (size) {
@@ -787,9 +815,8 @@ export function App() {
       audio.playDemo()
       resetBeats()
       setSource('demo')
-      say(withController
-        ? 'Left stick aims. A / Cross paints. Y / Triangle opens the menu.'
-        : 'Paint with the dock. Right-click erases. Wait for the drop.')
+      if (withController) say('Left stick aims. A / Cross paints. Y / Triangle opens the menu.')
+      else if (!live.current.starter) say('Paint with the dock. Right-click erases. Wait for the drop.')
     } catch (error) { say(describe(error)) }
   }
 
@@ -880,8 +907,9 @@ export function App() {
     if (!erase && isBeatTool(tool)) return
     if (!erase && isClickTool(tool)) {
       if (tool === BLAST) world.current.blast(cell.x, cell.y, blastRadius(brush), .8 + brush / 25, true)
-      else if (!world.current.placeBomb(cell.x, cell.y, session.current.active && runningMode.current === 'skyline')) say('No room for a bomb there.')
+      else if (!world.current.placeBomb(cell.x, cell.y, session.current.active && runningMode.current === 'skyline')) { say('No room for a bomb there.'); return }
     } else world.current.paint(cell.x, cell.y, brush, tool, erase)
+    coach(stepForPaint(tool, erase))
   }
 
   function paintLine(from: Cell, to: Cell, erase: boolean, { brush, tool }: Brush = live.current) {
@@ -986,10 +1014,10 @@ export function App() {
       <header className="hud top">
         <div className="brand">
           <div className="logo">POWDER<b>RAVE</b></div>
-          <button className={`chip ${directorOpen ? 'on' : ''}`} aria-expanded={directorOpen} onClick={() => {
+          {!starter && <button className={`chip ${directorOpen ? 'on' : ''}`} aria-expanded={directorOpen} onClick={() => {
             if (session.current.active || session.current.finished) { say('Return to Sandbox to use the Director.'); return }
             setDirectorOpen(o => !o); setMixOpen(false); setMenu('none')
-          }}>Director</button>
+          }}>Director</button>}
           <div className="chips">
             <div className="menu-wrap">
               <button className={`chip scene-btn ${menu === 'scenes' ? 'on' : ''}`} aria-expanded={menu === 'scenes'}
@@ -1007,15 +1035,15 @@ export function App() {
                 </div>
               )}
             </div>
-            <div className="seg mode" role="group" aria-label="Mode">
+            {!starter && <div className="seg mode" role="group" aria-label="Mode">
               <button className={!rave.active && !rave.finished ? 'on' : ''} onClick={leaveRave}>Sandbox</button>
               <button className={rave.active || rave.finished ? 'on' : ''} aria-haspopup="dialog"
                 onClick={() => openRavePicker()}>Rave</button>
-            </div>
+            </div>}
             {controllerConnected && (
               <button className="chip" aria-haspopup="dialog" onClick={() => changeControllerPage('main')}>Controller</button>
             )}
-            <div className="menu-wrap">
+            {!starter && <div className="menu-wrap">
               <button className={`chip ${isBeatTool(tool) || menu === 'beats' ? 'on' : ''}`} aria-expanded={menu === 'beats'}
                 onClick={() => setMenu(m => m === 'beats' ? 'none' : 'beats')}>Beat brushes</button>
               {menu === 'beats' && (
@@ -1028,7 +1056,7 @@ export function App() {
                   ))}
                 </section>
               )}
-            </div>
+            </div>}
           </div>
           {secondConnected && !splash && (
             <div className="coop" aria-label="Co-op brushes">
@@ -1055,7 +1083,7 @@ export function App() {
                 {mapped === 'ready' ? 'MAPPED' : 'MAPPING…'}
               </span>
             )}
-            <div className="menu-wrap">
+            {!starter && <div className="menu-wrap">
               <button className={`chip recbtn ${recording ? 'live' : armed ? 'armed' : ''}`} aria-expanded={menu === 'rec'}
                 title="Record a clip"
                 onClick={() => recording ? record() : armed ? toggleCatch() : setMenu(m => m === 'rec' ? 'none' : 'rec')}>
@@ -1071,10 +1099,10 @@ export function App() {
                   </button>
                 </div>
               )}
-            </div>
-            <button className={`chip mixbtn ${mixOpen ? 'on' : ''}`} onClick={() => { setMenu('none'); setMixOpen(o => !o) }} aria-expanded={mixOpen}>Mix</button>
+            </div>}
+            {!starter && <button className={`chip mixbtn ${mixOpen ? 'on' : ''}`} onClick={() => { setMenu('none'); setMixOpen(o => !o) }} aria-expanded={mixOpen}>Mix</button>}
           </div>
-          {mixOpen && (
+          {mixOpen && !starter && (
             <section className="mix" aria-label="Mix and world settings">
               <label className="slider" title="Aurora, light beams and drifting particles behind the world">
                 <span>Atmosphere<em>{Math.round(settings.atmosphere * 100)}%</em></span>
@@ -1116,18 +1144,23 @@ export function App() {
 
       <nav ref={dock} className="hud dock">
         {PADS.map(p => (
-          <button key={p.tool} className={`pad ${isBeatTool(p.tool) ? 'beat-pad ' : ''}${tool === p.tool ? 'on' : ''}`} style={{ '--c': p.swatch } as CSSProperties}
+          <button key={p.tool} hidden={!visiblePads.includes(p)} className={`pad ${isBeatTool(p.tool) ? 'beat-pad ' : ''}${tool === p.tool ? 'on' : ''}`} style={{ '--c': p.swatch } as CSSProperties}
             title={`${p.name} (${p.key}): ${p.hint}`} aria-pressed={tool === p.tool} onClick={() => setTool(p.tool)}>
             <kbd>{p.key}</kbd><i className="sw" /><span>{p.name}</span>
           </button>
         ))}
+        {fewTools && (
+          <button className="pad more-pad" title="Show every material and tool" onClick={() => setAllTools(true)}>
+            <i className="sw" aria-hidden>+</i><span>More</span>
+          </button>
+        )}
         <i className="sep" />
         <button className="tool" title="Smaller brush ([)" onClick={() => setBrush(b => Math.max(1, b - 1))}>−</button>
         <span className="size" title="Brush size (scroll to change)">{brush}</span>
         <button className="tool" title="Bigger brush (])" onClick={() => setBrush(b => Math.min(MAX_BRUSH, b + 1))}>+</button>
         <button className="tool" title={paused ? 'Resume (Space)' : 'Freeze (Space)'} onClick={() => setPaused(p => !p)}>{paused ? '▶' : '❚❚'}</button>
         <button className="tool" title="Reset scene (R)" onClick={() => loadScene(scene)}>↺</button>
-        <button className={`tool ${placing ? 'on' : ''}`} title="Drop an image into the world (I). You can also drag one in or paste it." onClick={() => imagePicker.current?.click()}>
+        <button hidden={starter} className={`tool ${placing ? 'on' : ''}`} title="Drop an image into the world (I). You can also drag one in or paste it." onClick={() => imagePicker.current?.click()}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="2" /><path d="m21 17-5-5-9 8" />
           </svg>
@@ -1182,8 +1215,23 @@ export function App() {
               )}
             </section>
           )}
+          {starter && !rave.active && !rave.finished && (
+            <section className="coach" aria-label="Getting started" aria-live="polite">
+              <div className="coach-head"><strong>FIRST DROP</strong><button onClick={() => finishGuide('Everything is unlocked.')}>Skip</button></div>
+              <ol>
+                {COACH_STEPS.map(step => {
+                  const state = coachDone.includes(step.id) ? 'done' : currentStep(coachDone) === step.id ? 'now' : ''
+                  return (
+                    <li key={step.id} className={state}>
+                      <b>{step.title}</b>{state === 'now' && <small>{step.detail}</small>}
+                    </li>
+                  )
+                })}
+              </ol>
+            </section>
+          )}
           {!rave.finished && (
-            <button className={`dropbtn main-drop ${(rave.active ? rave.charge >= 1 && !rave.scoring : dropReady) ? 'ready' : ''}`}
+            <button className={`dropbtn main-drop ${(rave.active ? rave.charge >= 1 && !rave.scoring : dropReady || (starter && currentStep(coachDone) === 'drop')) ? 'ready' : ''}`}
               style={{ '--charge': `${(rave.active ? rave.charge : 1) * 100}%` } as CSSProperties}
               title={rave.active ? 'The music charges your drop. Press D on the beat for a multiplier.' : 'Force a drop (D)'}
               onClick={() => triggerDrop()}>

@@ -8,6 +8,8 @@ A full-screen falling-sand world that hears your music. Kicks make the ground ju
 2. `npm install`, then `npm run dev`, and open the URL Vite prints.
 3. Hit **DROP THE BEAT** with sound on.
 
+The first time someone plays, the HUD starts trimmed down to seven tools and a three-step **First drop** guide (paint something, plant a bomb, hit DROP). Finishing it, or pressing **Skip**, unlocks everything; **More** in the dock, or picking any other tool by key, shows the full dock early. Players who used the game before the guide existed skip it.
+
 `npm test` runs the physics, beat-detection and save tests. `npm run build` makes the production build in `dist/`, and `npm run preview` serves it.
 
 ## What the music does
@@ -115,6 +117,7 @@ Audio never leaves the browser.
 - `src/audio.ts`: audio sources and the analyser.
 - `src/render.ts`: pixel and glow layers, shockwave rings and the brush cursor.
 - `src/save.ts`: world save format (v1).
+- `src/onboarding.ts`: the first-run guide steps and starter tools.
 - `src/App.tsx`: the HUD and main loop.
 
 Inspired by DAN-BALL's [Powder Game](https://dan-ball.jp/en/javagame/dust2/).
