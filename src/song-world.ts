@@ -143,6 +143,16 @@ export function buildSongWorld(world: World, shape: SongShape = current ?? FALLB
     const floor = settle(x - (sw >> 1), x + (sw >> 1))
     seat(x - (sw >> 1), x + (sw >> 1), floor)
     for (let y = floor - sh; y < floor + 2; y++) for (let dx = -(sw >> 1); dx < sw >> 1; dx++) world.set(x + dx, y, M.Speaker)
+    // A rock footing down to the solid layer, so the music cannot wash the ground out from under it.
+    for (let dx = -(sw >> 1); dx < sw >> 1; dx++) {
+      const cx = x + dx
+      if (cx < 0 || cx >= W) continue
+      for (let y = floor + 2; y < H && world.at(cx, y) !== M.Wall; y++) {
+        const i = world.index(cx, y)
+        if (world.type[i] === M.Empty || world.type[i] === M.Water) world.put(i, M.Sand, hue)
+        world.type[i] = M.Wall
+      }
+    }
   }
 
   // Busy hi-hats bring rain clouds over the brightest stretch; slow songs plant seeds.

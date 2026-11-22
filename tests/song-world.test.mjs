@@ -141,3 +141,20 @@ test('the rock under the loose layer keeps the beat-coloured stripes', () => {
   assert.ok(rock.every(i => world.type[i] === M.Wall), 'rock below')
   assert.ok(new Set(rock.map(i => world.color[i])).size > 3, 'striped, not plain grey')
 })
+
+test('speakers stand on rock, so a minute of kicks never leaves them floating', () => {
+  const world = seededWorld(380, 238)
+  const song = { ...cliffSong(), bass: cliffSong().loud.map((_, i) => .4 + .6 * Math.abs(Math.sin(i / 95 * 9))), treble: cliffSong().loud.map(() => .6) }
+  buildSongWorld(world, song)
+  const bottoms = () => {
+    const cols = new Map()
+    for (let i = 0; i < world.size; i++) if (world.type[i] === M.Speaker) {
+      const x = i % world.width, y = Math.floor(i / world.width)
+      cols.set(x, Math.max(cols.get(x) ?? -1, y))
+    }
+    return cols
+  }
+  assert.ok(bottoms().size > 0, 'the song has speakers')
+  for (let k = 0; k < 3600; k++) { if (k % 28 === 0) world.onKick(.9); world.step() }
+  for (const [x, y] of bottoms()) assert.equal(world.at(x, y + 1), M.Wall, `speaker column ${x} is supported`)
+})
