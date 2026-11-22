@@ -61,6 +61,9 @@ function sample(values: number[], u: number, window = .015) {
 
 const mean = (values: number[]) => values.reduce((a, b) => a + b, 0) / Math.max(1, values.length)
 
+/** How many cells of loose sand and glitter sit on top of the rock (6–8, by grid height). */
+export const looseDepth = (height: number) => Math.max(6, Math.min(8, Math.round(height * .03)))
+
 /** Builds the world for a song and returns the labels to show over each drop crater. */
 export function buildSongWorld(world: World, shape: SongShape = current ?? FALLBACK): ChallengeMarker[] {
   const { width: W, height: H } = world
@@ -77,14 +80,18 @@ export function buildSongWorld(world: World, shape: SongShape = current ?? FALLB
     ground[x] = Math.round(low - (low - high) * Math.pow(sample(shape.loud, u), 1.35) + ridge)
   }
 
-  // Strata: beat-coloured sand bands, glitter bands where the treble is bright, rock underneath.
+  // Strata: beat-coloured bands, glitter bands where the treble is bright. Only a surface layer is loose
+  // sand and glitter for the music and players to move; below it the same bands are solid rock, so the
+  // mountains keep the song's silhouette however long it plays. Blasts still smash the rock into gravel.
+  const loose = looseDepth(H)
   for (let x = 0; x < W; x++) {
     const u = x / Math.max(1, W - 1), treble = sample(shape.treble, u), bass = sample(shape.bass, u)
     for (let y = ground[x]; y < H; y++) {
-      const depth = y - ground[x], band = Math.floor(depth / 3)
+      const depth = y - ground[x], band = Math.floor(depth / 3), i = world.index(x, y)
       if (y >= bedrock || depth > (H - ground[x]) * .55) { world.set(x, y, M.Wall); continue }
       const material = treble > .55 && band % 3 === 1 ? M.Glitter : M.Sand
-      world.put(world.index(x, y), material, hue + band * 23 + bass * 40)
+      world.put(i, material, hue + band * 23 + bass * 40)
+      if (depth >= loose) world.type[i] = M.Wall
     }
   }
 

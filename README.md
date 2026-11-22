@@ -84,7 +84,7 @@ Images never leave your browser.
 
 ## Song-shaped worlds
 
-When an uploaded song finishes mapping, press **Build its world** (or pick **♪ song name** at the top of the world menu). Powder Rave builds a landscape from the song: left to right is the song from start to end, loud sections rise into mountains and quiet breakdowns sink into lakes, every drop becomes a labelled lava crater at the moment it lands, speakers stand where the bass hits hardest, bright hi-hat sections get glitter strata (and busy hi-hats bring rain clouds), slow songs get seeds, and the song's character picks the colours. While it plays, a beam of light walks across the world, so you can watch the song arrive at each drop. **R** rebuilds it.
+When an uploaded song finishes mapping, press **Build its world** (or pick **♪ song name** at the top of the world menu). Powder Rave builds a landscape from the song: left to right is the song from start to end, loud sections rise into mountains and quiet breakdowns sink into lakes, every drop becomes a labelled lava crater at the moment it lands, speakers stand where the bass hits hardest, the mountains are solid rock in beat-coloured stripes under a few cells of loose sand for the music and your bombs to throw around (so they keep the song's shape however long it plays), bright hi-hat sections get glitter strata (and busy hi-hats bring rain clouds), slow songs get seeds, and the song's character picks the colours. While it plays, a beam of light walks across the world, so you can watch the song arrive at each drop. **R** rebuilds it.
 
 ## Rave Mode
 
