@@ -18,17 +18,18 @@ import { prepareChallenge, RAVE_MODES, type RaveMode } from './rave-challenges.t
 import { blastRadius, createRenderer, drawOverlay, type BrushCursor, type Cursor, type View } from './render.ts'
 import { decodeWorld, encodeWorld, MAX_FILE_BYTES, SAVE_KEY } from './save.ts'
 import { buildScene, gridFor, SCENES, WORLD_SIZES, type WorldSize } from './scenes.ts'
+import { spawnCrowd } from './crowd.ts'
 import { readLocal, writeLocal } from './storage.ts'
 import { COACH_STEPS, completeStep, currentStep, isNewPlayer, ONBOARDED_KEY, STARTER_TOOLS, stepForPaint, type CoachStep } from './onboarding.ts'
 import { DEFAULT_REACTIONS, World, type Reactions, type SceneId } from './world.ts'
 
-type Settings = { reactions: Reactions; glow: number; sensitivity: number; size: WorldSize; atmosphere: number; dropRumble: boolean }
+type Settings = { reactions: Reactions; glow: number; sensitivity: number; size: WorldSize; atmosphere: number; dropRumble: boolean; crowd: boolean }
 type Cell = { x: number; y: number }
 type Brush = { tool: Tool; brush: number }
 type Stroke = { last: Cell; erase: boolean }
 type Seat = { point: Cursor | null; stroke: (Stroke & Brush & { world: World }) | null; stick: number }
 const SETTINGS_KEY = 'powder-rave-settings-v1'
-const DEFAULT_SETTINGS: Settings = { reactions: DEFAULT_REACTIONS, glow: 1, sensitivity: 1, size: 'medium', atmosphere: 1, dropRumble: true }
+const DEFAULT_SETTINGS: Settings = { reactions: DEFAULT_REACTIONS, glow: 1, sensitivity: 1, size: 'medium', atmosphere: 1, dropRumble: true, crowd: true }
 const MAX_BRUSH = 30
 const CLIP_SECONDS = 10
 const STEP_MS = 1000 / 60
@@ -188,6 +189,13 @@ export function App() {
   }, [tool])
 
   useEffect(() => {
+    const w = world.current
+    if (!w) return
+    if (!settings.crowd) w.ravers = []
+    else if (!w.ravers.length) spawnCrowd(w)
+  }, [settings.crowd])
+
+  useEffect(() => {
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)) } catch { /* storage unavailable */ }
     detector.sensitivity = settings.sensitivity
   }, [settings])
@@ -212,6 +220,7 @@ export function App() {
       setCanRetry(false)
     }
     stroke.current = null
+    if (live.current.settings.crowd && !next.ravers.length) spawnCrowd(next)
     world.current = next
     draw.current = createRenderer(next, base.current!, glow.current!, bloom.current!)
     setScene(next.scene)
@@ -1123,6 +1132,11 @@ export function App() {
                   </label>
                 )
               })}
+              <div className="row-label">Crowd</div>
+              <div className="seg">
+                <button className={settings.crowd ? 'on' : ''} onClick={() => setSettings(s => ({ ...s, crowd: true }))}>Ravers on</button>
+                <button className={settings.crowd ? '' : 'on'} onClick={() => setSettings(s => ({ ...s, crowd: false }))}>Off</button>
+              </div>
               <div className="row-label">World detail</div>
               <div className="seg">
                 {WORLD_SIZES.map(s => (
@@ -1136,7 +1150,7 @@ export function App() {
                 <button onClick={exportWorld}>Export</button>
                 <button onClick={() => worldPicker.current?.click()}>Import</button>
               </div>
-              <button className="reset-mix" onClick={() => setSettings(s => ({ ...DEFAULT_SETTINGS, size: s.size, dropRumble: s.dropRumble }))}>Reset mix</button>
+              <button className="reset-mix" onClick={() => setSettings(s => ({ ...DEFAULT_SETTINGS, size: s.size, dropRumble: s.dropRumble, crowd: s.crowd }))}>Reset mix</button>
             </section>
           )}
         </div>

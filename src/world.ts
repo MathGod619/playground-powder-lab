@@ -1,4 +1,5 @@
 import { colorFor, FIRE_PALETTE, hsl, obsidian, pack, STEAM, type Rng } from './color.ts'
+import { crowdDrop, crowdHat, crowdKick, crowdPush, stepCrowd, type Raver } from './crowd.ts'
 import type { Energy } from './immersion.ts'
 import {
   BOMB_DROP_ONLY, BOMB_FIXED, BOMB_FUSE, BREAKABLE, BRUSH_DENSITY, DENSITY, ERASE, FLUID, HOPPER, M, OVERWRITES, POWDER, type Tool,
@@ -84,6 +85,8 @@ export class World {
   bursts: { at: number; x: number; y: number }[] = []
   fuses: { at: number; i: number }[] = []
   pulse: Pulse = { kick: 0, speaker: 0, twinkle: 0, flash: 0, shake: 0 }
+  /** The dancing crowd (see crowd.ts). Empty when the crowd is off. */
+  ravers: Raver[] = []
 
   constructor(width: number, height: number, rng: Rng = Math.random) {
     this.width = width
@@ -329,6 +332,7 @@ export class World {
   /** One simulation tick (60 per second). */
   step() {
     this.frame++
+    if (this.ravers.length) stepCrowd(this)
     if (this.scene === 'volcano' && this.energy.bass > .15 && this.frame % 12 === 0)
       this.erupt(this.width / 2, this.craterY, this.pressure * .7 * this.continuousReactions.kick)
     if (this.frame % 18 === 0 && this.energy.treble > .15) this.sparkle(this.energy.treble * this.continuousReactions.sparks)
@@ -483,6 +487,7 @@ export class World {
     }
     this.rings.push({ x, y, r: 1, max: 26 * power, hue, width: 3 })
     this.pulse.flash = Math.max(this.pulse.flash, .18 * power)
+    crowdPush(this, x, y, 8 * power, .3 * power)
   }
 
   /** The radius a bomb blast covers on this grid. */
@@ -525,6 +530,7 @@ export class World {
       const a = r() * Math.PI * 2, s = 1 + r() * 4.5 * power
       this.addParticle(cx, cy, Math.cos(a) * s, Math.sin(a) * s - 1, M.Spark, FIRE_PALETTE[80 + r() * 150 | 0], 15 + r() * 35)
     }
+    crowdPush(this, cx, cy, R, power)
     this.rings.push({ x: cx, y: cy, r: 1, max: R * 2.4, hue: 25, width: 4 })
     this.pulse.flash = Math.max(this.pulse.flash, Math.min(.8, .3 * power))
     this.pulse.shake = Math.max(this.pulse.shake, 8 + 12 * power)
@@ -663,6 +669,7 @@ export class World {
           }
         }
       }
+      crowdPush(this, e.x, e.y, Math.min(R * .4, this.width * .06), strength * .25)
       this.rings.push({ x: e.x, y: e.y, r: 2, max: R * 1.7, hue: this.hue, width: 2 })
     }
     return emitters.length
@@ -742,6 +749,7 @@ export class World {
     this.speakerKick(strength * react.speakers)
     this.growPlants(false)
     this.tickBombs()
+    crowdKick(this, strength * react.kick)
     if (strength > .85 && this.rng() < .12) this.strike()
     this.hooks.kick?.(this, strength * react.kick)
   }
@@ -751,6 +759,7 @@ export class World {
     if (paused) return
     this.sparkle(strength * react.sparks)
     this.rain(Math.max(.4, strength) * Math.max(react.sparks, .5))
+    crowdHat(this)
     this.hooks.hat?.(this, strength * react.sparks)
   }
 
@@ -779,6 +788,7 @@ export class World {
     this.growPlants(true)
     const bombs = this.bombs().sort((a, b) => (a % this.width) - (b % this.width))
     bombs.forEach((i, n) => this.schedule(i, this.life[i] === BOMB_FIXED ? 3 + (n % 12) * 3 : 3 + n * 4))
+    crowdDrop(this)
     for (let k = 0; k < 3; k++) if (!this.strike()) break
     const r = this.rng
     for (let k = 0; k < 8; k++) this.bursts.push({ at: this.frame + k * 7 + 2, x: this.width * (.1 + r() * .8), y: this.height * (.12 + r() * .35) })

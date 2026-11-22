@@ -25,6 +25,10 @@ The first time someone plays, the HUD starts trimmed down to seven tools and a t
 
 When you play a file, Powder Rave decodes the whole song and maps its kicks, hi-hats, tempo and drops before reacting (the **MAPPED** badge). Beats then fire exactly on time instead of a moment late, and a **DROP IN 3 · 2 · 1** countdown appears before each drop. Demo, mic and tab audio still react live.
 
+## The crowd
+
+Tiny pixel ravers with glow sticks live in every world. They walk the terrain and step up small ledges, bob on every kick (some hop), wave on the hi-hats, and jump and cheer on the drop. Blasts, bombs, fireworks and speakers fling them; a hard landing leaves them dazed for a moment. Buried ravers climb out, ravers that fall in water swim to the surface, and anyone who touches fire or lava vanishes in a puff and walks back in from the edge a few seconds later. On the Moon they float; in Deep Sea they walk the seabed. Turn them off under **Mix → Crowd**.
+
 ## Materials
 
 Sand, Water, Wall, Fire, Oil, Lava, **Glitter** (takes the current beat colour, so painting in rhythm leaves rainbow layers), **Seed** (grows on the beat, flowers on the drop), **Speaker** and **Rocket** (launches and bursts into sparks and glitter). Lava and water make obsidian and steam. Fire burns oil and plants.
@@ -118,6 +122,7 @@ Audio never leaves the browser.
 - `src/render.ts`: pixel and glow layers, shockwave rings and the brush cursor.
 - `src/save.ts`: world save format (v1).
 - `src/onboarding.ts`: the first-run guide steps and starter tools.
+- `src/crowd.ts`: the dancing crowd: movement, beat reactions, blasts and sprites.
 - `src/App.tsx`: the HUD and main loop.
 
 Inspired by DAN-BALL's [Powder Game](https://dan-ball.jp/en/javagame/dust2/).
