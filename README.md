@@ -92,6 +92,7 @@ Choose **Rave** to pick Freestyle or a challenge. On a controller, open the menu
 
 - **Topple the Skyline** gives you one drop. Place several bombs inside each tower, starting low. The charges stay where you place them and wait for the drop. Topple at least **six of eight towers**. A tower counts when it loses at least 60% of its original bricks during the five seconds after the drop.
 - **Keep the Garden Alive** gives you three drops. The challenge card names the beds that will get hit next. Water those beds before the drop and keep at least **six of nine roots** alive after each wave.
+- **Boss Drop** gives you four drops to take down a monster stomping across the arena. A shield protects it except for a few seconds after each drop, so plant bombs right beside it: they wait for the drop. Each drop hits it a little, bombs next to it hit hard, and on-beat timing multiplies all of it. Every eighth beat it fights back, either eating the bombs within reach (its mouth glows the beat before) or spitting lava. Kill it before the drops run out.
 
 ## Worlds
 
@@ -127,6 +128,7 @@ Audio never leaves the browser.
 - `src/save.ts`: world save format (v1).
 - `src/onboarding.ts`: the first-run guide steps and starter tools.
 - `src/crowd.ts`: the dancing crowd: movement, beat reactions, blasts and sprites.
+- `src/boss.ts`: the Boss Drop monster: shield, damage, attacks and sprite.
 - `src/App.tsx`: the HUD and main loop.
 
 Inspired by DAN-BALL's [Powder Game](https://dan-ball.jp/en/javagame/dust2/).

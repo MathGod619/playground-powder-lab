@@ -1,4 +1,5 @@
 import { colorFor, FIRE_PALETTE, hsl, obsidian, pack, STEAM, type Rng } from './color.ts'
+import { bossBlast, bossDrop, bossKick, stepBoss, type Boss } from './boss.ts'
 import { crowdDrop, crowdHat, crowdKick, crowdPush, stepCrowd, type Raver } from './crowd.ts'
 import type { Energy } from './immersion.ts'
 import {
@@ -87,6 +88,8 @@ export class World {
   pulse: Pulse = { kick: 0, speaker: 0, twinkle: 0, flash: 0, shake: 0 }
   /** The dancing crowd (see crowd.ts). Empty when the crowd is off. */
   ravers: Raver[] = []
+  /** The Boss Drop monster (see boss.ts), only in that challenge. */
+  boss: Boss | null = null
 
   constructor(width: number, height: number, rng: Rng = Math.random) {
     this.width = width
@@ -333,6 +336,7 @@ export class World {
   step() {
     this.frame++
     if (this.ravers.length) stepCrowd(this)
+    if (this.boss) stepBoss(this)
     if (this.scene === 'volcano' && this.energy.bass > .15 && this.frame % 12 === 0)
       this.erupt(this.width / 2, this.craterY, this.pressure * .7 * this.continuousReactions.kick)
     if (this.frame % 18 === 0 && this.energy.treble > .15) this.sparkle(this.energy.treble * this.continuousReactions.sparks)
@@ -488,6 +492,7 @@ export class World {
     this.rings.push({ x, y, r: 1, max: 26 * power, hue, width: 3 })
     this.pulse.flash = Math.max(this.pulse.flash, .18 * power)
     crowdPush(this, x, y, 8 * power, .3 * power)
+    bossBlast(this, x, y, 6 * power, .25 * power)
   }
 
   /** The radius a bomb blast covers on this grid. */
@@ -531,6 +536,7 @@ export class World {
       this.addParticle(cx, cy, Math.cos(a) * s, Math.sin(a) * s - 1, M.Spark, FIRE_PALETTE[80 + r() * 150 | 0], 15 + r() * 35)
     }
     crowdPush(this, cx, cy, R, power)
+    bossBlast(this, cx, cy, R, power)
     this.rings.push({ x: cx, y: cy, r: 1, max: R * 2.4, hue: 25, width: 4 })
     this.pulse.flash = Math.max(this.pulse.flash, Math.min(.8, .3 * power))
     this.pulse.shake = Math.max(this.pulse.shake, 8 + 12 * power)
@@ -750,6 +756,7 @@ export class World {
     this.growPlants(false)
     this.tickBombs()
     crowdKick(this, strength * react.kick)
+    bossKick(this)
     if (strength > .85 && this.rng() < .12) this.strike()
     this.hooks.kick?.(this, strength * react.kick)
   }
@@ -789,6 +796,7 @@ export class World {
     const bombs = this.bombs().sort((a, b) => (a % this.width) - (b % this.width))
     bombs.forEach((i, n) => this.schedule(i, this.life[i] === BOMB_FIXED ? 3 + (n % 12) * 3 : 3 + n * 4))
     crowdDrop(this)
+    bossDrop(this)
     for (let k = 0; k < 3; k++) if (!this.strike()) break
     const r = this.rng
     for (let k = 0; k < 8; k++) this.bursts.push({ at: this.frame + k * 7 + 2, x: this.width * (.1 + r() * .8), y: this.height * (.12 + r() * .35) })

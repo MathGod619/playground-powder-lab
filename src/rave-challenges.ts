@@ -1,12 +1,14 @@
+import { spawnBoss } from './boss.ts'
 import { pack } from './color.ts'
 import type { RaveObjective } from './immersion.ts'
 import { M } from './materials.ts'
 import { CITY_TOWERS, cityStreet } from './scenes.ts'
 import type { SceneId, World } from './world.ts'
 
-export type RaveMode = 'freestyle' | 'skyline' | 'garden'
+export type RaveMode = 'freestyle' | 'skyline' | 'garden' | 'boss'
 export const SKYLINE_GOAL = 6
 export const GARDEN_GOAL = 6
+export const BOSS_DROPS = 4
 const BED_NAMES = ['Left', 'Center', 'Right']
 const WAVES = [[0, 1], [1, 2], [0, 2]]
 
@@ -14,6 +16,7 @@ export const RAVE_MODES: { id: RaveMode; name: string; scene?: SceneId; detail: 
   { id: 'freestyle', name: 'Freestyle', detail: 'Three drops on your current world. Chain reactions and on-beat timing earn points.' },
   { id: 'skyline', name: 'Topple the Skyline', scene: 'city', detail: 'Plant charges in the towers. Bring down six of eight towers with one drop.' },
   { id: 'garden', name: 'Keep the Garden Alive', scene: 'garden', detail: 'Use water to protect at least six of nine roots through three lava waves.' },
+  { id: 'boss', name: 'Boss Drop', scene: 'blank', detail: 'A shielded monster stomps the arena. Plant bombs beside it and drop on the beat. Four drops to take it down.' },
 ]
 
 export type ChallengeMarker = { x: number; y: number; label: string }
@@ -114,7 +117,30 @@ function garden(world: World): PreparedChallenge {
   }
 }
 
+function boss(world: World): PreparedChallenge {
+  // Raise the Blank world's floor so the monster stands clear of the dock, with a low step on each side.
+  const { width, height } = world, floor = Math.floor(height * .8)
+  for (let y = floor; y < height; y++) for (let x = 0; x < width; x++) world.set(x, y, M.Wall)
+  for (const [from, to] of [[0, .12], [.88, 1]]) {
+    for (let y = floor - 4; y < floor; y++) for (let x = Math.floor(width * from); x < Math.floor(width * to); x++) world.set(x, y, M.Wall)
+  }
+  const monster = spawnBoss(world)
+  return {
+    objective: {
+      dropLimit: BOSS_DROPS, target: 100, chargeSeconds: 5, impactSeconds: 4, cumulative: true,
+      measure: () => Math.round((1 - monster.hp / monster.max) * 100),
+    },
+    hint: (drops, scoring) => {
+      if (scoring) return monster.lastHit > 0 ? `Hit for ${Math.round(monster.lastHit)}!` : 'Its shield is down. Anything burning hurts it now.'
+      if (!drops) return 'Plant bombs right beside it, then drop on the beat. Every 8th beat it eats bombs or spits lava.'
+      const left = BOSS_DROPS - drops
+      return `${left} drop${left === 1 ? '' : 's'} left. Its mouth glows before it eats your bombs.`
+    },
+  }
+}
+
 export function prepareChallenge(mode: RaveMode, world: World): PreparedChallenge | null {
+  if (mode === 'boss') return boss(world)
   if (mode === 'skyline') return skyline(world)
   if (mode === 'garden') return garden(world)
   return null

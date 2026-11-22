@@ -46,6 +46,8 @@ export type RaveObjective = {
   measure: () => number
   beforeDrop?: () => void
   afterDrop?: (drop: number) => void
+  /** Progress builds up over the drops (Boss Drop): only judge it after the last one, and clear early on reaching the target. */
+  cumulative?: boolean
 }
 type RaveOutcome = 'cleared' | 'failed' | 'timeout'
 
@@ -118,7 +120,9 @@ export class RaveSession {
     }
     if (wasScoring && !this.scoring && this.objective) {
       this.objectiveProgress = this.objective.measure()
-      if (this.objectiveProgress < this.objective.target) { this.finish('failed'); return }
+      const reached = this.objectiveProgress >= this.objective.target
+      if (this.objective.cumulative && reached) { this.finish('cleared'); return }
+      if (!reached && (!this.objective.cumulative || this.drops === this.dropLimit)) { this.finish('failed'); return }
     }
     if (!this.scoring) {
       if (this.drops === this.dropLimit) this.finish('cleared')

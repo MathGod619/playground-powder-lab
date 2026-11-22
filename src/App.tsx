@@ -239,6 +239,7 @@ export function App() {
       const t = audio.fileTime() ?? performance.now() / 1000
       const r = challenge.drop(beatOffset(t, beat.current.last, beat.current.period), world.current.census())
       if (!r) return
+      if (world.current.boss) world.current.boss.multiplier = r.grade.multiplier
       setResult({ ...r })
     }
     if (manual && !challenge.active && !challenge.finished) {
@@ -546,7 +547,7 @@ export function App() {
     frame = requestAnimationFrame(loop)
     audio.onEnded = () => { setSource(null); say('Audio stopped. Pick another source.') }
     // Development-only handle for automated play-testing.
-    if (import.meta.env.DEV) Object.assign(window, { __rave: { world: () => world.current, audio, recorder, step: (n: number) => { for (let k = 0; k < n; k++) world.current.step() }, draw: () => draw.current() } })
+    if (import.meta.env.DEV) Object.assign(window, { __rave: { world: () => world.current, session: () => session.current, audio, recorder, step: (n: number) => { for (let k = 0; k < n; k++) world.current.step() }, draw: () => draw.current() } })
     return () => {
       cancelAnimationFrame(frame)
       clearTimeout(chromaTimer.current)
@@ -850,7 +851,7 @@ export function App() {
     setMenu('none')
     changeControllerPage(null)
     if (mode !== 'freestyle') {
-      const startingTool = mode === 'skyline' ? M.Bomb : M.Water
+      const startingTool = mode === 'garden' ? M.Water : M.Bomb
       setTool(startingTool)
       setSecondTool(startingTool)
       dock.current?.children[PADS.findIndex(p => p.tool === startingTool)]?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
@@ -920,7 +921,7 @@ export function App() {
     if (!erase && isBeatTool(tool)) return
     if (!erase && isClickTool(tool)) {
       if (tool === BLAST) world.current.blast(cell.x, cell.y, blastRadius(brush), .8 + brush / 25, true)
-      else if (!world.current.placeBomb(cell.x, cell.y, session.current.active && runningMode.current === 'skyline')) { say('No room for a bomb there.'); return }
+      else if (!world.current.placeBomb(cell.x, cell.y, session.current.active && (runningMode.current === 'skyline' || runningMode.current === 'boss'))) { say('No room for a bomb there.'); return }
     } else world.current.paint(cell.x, cell.y, brush, tool, erase)
     coach(stepForPaint(tool, erase))
   }
@@ -978,7 +979,7 @@ export function App() {
 
   const activePad = PADS.find(p => p.tool === tool)
   const modeName = RAVE_MODES.find(mode => mode.id === raveMode)?.name
-  const objectiveLabel = raveMode === 'skyline' ? 'Towers toppled' : 'Roots alive'
+  const objectiveLabel = raveMode === 'skyline' ? 'Towers toppled' : raveMode === 'boss' ? 'Boss damage' : 'Roots alive'
 
   function directorContext() {
     const w = world.current, bounds = imageBounds.current

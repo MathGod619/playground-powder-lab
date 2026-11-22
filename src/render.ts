@@ -1,4 +1,5 @@
 import { FIRE_PALETTE, half, hsl } from './color.ts'
+import { drawBoss } from './boss.ts'
 import { drawCrowd } from './crowd.ts'
 import { BLAST, BOMB_DROP_ONLY, ERASE, GLOWS, M, type Tool } from './materials.ts'
 import type { ChallengeMarker } from './rave-challenges.ts'
@@ -77,6 +78,7 @@ export function createRenderer(world: World, base: HTMLCanvasElement, glow: HTML
       }
     }
     if (world.ravers.length) drawCrowd(world, pix, gpix)
+    if (world.boss) drawBoss(world, pix, gpix)
     if (night > 0) darken(world, pix, gpix, night)
     ctx.putImageData(image, 0, 0)
     gctx.putImageData(glowImage, 0, 0)
