@@ -22,7 +22,11 @@ export function createRenderer(world: World, base: HTMLCanvasElement, glow: HTML
   const image = ctx.createImageData(W, H), pix = new Uint32Array(image.data.buffer)
   const glowImage = gctx.createImageData(W, H), gpix = new Uint32Array(glowImage.data.buffer)
 
-  return function draw() {
+  /**
+   * `night` (0–1) darkens everything that does not glow and tints it moonlight blue, so only lava, fire,
+   * glitter, lit windows, sparks and glow sticks show. The drop flash and kicks briefly light the world up.
+   */
+  return function draw(night = 0) {
     const { type, color, life, pulse } = world
     gpix.fill(0)
     const twinkle = pulse.twinkle > .05, speaker = pulse.speaker
@@ -73,10 +77,25 @@ export function createRenderer(world: World, base: HTMLCanvasElement, glow: HTML
       }
     }
     if (world.ravers.length) drawCrowd(world, pix, gpix)
+    if (night > 0) darken(world, pix, gpix, night)
     ctx.putImageData(image, 0, 0)
     gctx.putImageData(glowImage, 0, 0)
     bctx.clearRect(0, 0, bloom.width, bloom.height)
     bctx.drawImage(glow, 0, 0, bloom.width, bloom.height)
+  }
+}
+
+function darken(world: World, pix: Uint32Array, gpix: Uint32Array, night: number) {
+  const p = world.pulse
+  const light = Math.min(1, .07 + p.flash * 1.15 + p.kick * .05 + world.energy.level * .05)
+  const dark = night * (1 - light), k = 1 - dark
+  if (k > .995) return
+  const kr = k * (1 - .25 * dark) * 256 | 0, kg = k * (1 - .1 * dark) * 256 | 0, kb = Math.min(256, k * (1 + .5 * dark) * 256) | 0
+  for (let i = 0; i < pix.length; i++) {
+    const c = pix[i]
+    if (!c || gpix[i]) continue
+    const r = ((c & 255) * kr) >> 8, g = (((c >>> 8) & 255) * kg) >> 8, b = (((c >>> 16) & 255) * kb) >> 8
+    pix[i] = ((c & 0xff000000) | (b << 16) | (g << 8) | r) >>> 0
   }
 }
 

@@ -64,7 +64,7 @@ export class ClipRecorder {
   stop() { if (this.active) this.recorder!.stop() }
 
   /** Draws one frame. Call every animation frame while recording. */
-  frame(layers: Layers, world: World, view: View, glow: number, shake: [number, number]) {
+  frame(layers: Layers, world: World, view: View, glow: number, shake: [number, number], night = 0) {
     if (!this.active) return
     if (performance.now() >= this.until) { this.stop(); return }
     const { ctx, canvas } = this, w = canvas.width, h = canvas.height, k = w / innerWidth
@@ -76,12 +76,14 @@ export class ClipRecorder {
     ctx.fillStyle = '#06050a'
     ctx.fillRect(0, 0, w, h)
     const g = ctx.createRadialGradient(w / 2, h * 1.15, 0, w / 2, h * 1.15, Math.max(w, h) * .9)
-    g.addColorStop(0, `hsl(${hue} 95% ${10 + pulse * 22}%)`)
+    g.addColorStop(0, `hsl(${hue} 95% ${(10 + pulse * 22) * (1 - night * .7)}%)`)
     g.addColorStop(1, 'transparent')
     ctx.fillStyle = g
     ctx.fillRect(0, 0, w, h)
 
+    ctx.globalAlpha = 1 - night * .65
     if (world.scene !== 'sea') ctx.drawImage(layers.sky, 0, 0, w, h)
+    ctx.globalAlpha = 1
     const x = (view.x + shake[0]) * k, y = (view.y + shake[1]) * k
     const dw = world.width * view.scale * k, dh = world.height * view.scale * k
     ctx.imageSmoothingEnabled = false

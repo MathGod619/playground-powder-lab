@@ -23,13 +23,13 @@ import { readLocal, writeLocal } from './storage.ts'
 import { COACH_STEPS, completeStep, currentStep, isNewPlayer, ONBOARDED_KEY, STARTER_TOOLS, stepForPaint, type CoachStep } from './onboarding.ts'
 import { DEFAULT_REACTIONS, World, type Reactions, type SceneId } from './world.ts'
 
-type Settings = { reactions: Reactions; glow: number; sensitivity: number; size: WorldSize; atmosphere: number; dropRumble: boolean; crowd: boolean }
+type Settings = { reactions: Reactions; glow: number; sensitivity: number; size: WorldSize; atmosphere: number; dropRumble: boolean; crowd: boolean; night: boolean }
 type Cell = { x: number; y: number }
 type Brush = { tool: Tool; brush: number }
 type Stroke = { last: Cell; erase: boolean }
 type Seat = { point: Cursor | null; stroke: (Stroke & Brush & { world: World }) | null; stick: number }
 const SETTINGS_KEY = 'powder-rave-settings-v1'
-const DEFAULT_SETTINGS: Settings = { reactions: DEFAULT_REACTIONS, glow: 1, sensitivity: 1, size: 'medium', atmosphere: 1, dropRumble: true, crowd: true }
+const DEFAULT_SETTINGS: Settings = { reactions: DEFAULT_REACTIONS, glow: 1, sensitivity: 1, size: 'medium', atmosphere: 1, dropRumble: true, crowd: true, night: false }
 const MAX_BRUSH = 30
 const CLIP_SECONDS = 10
 const STEP_MS = 1000 / 60
@@ -145,7 +145,7 @@ export function App() {
   const chromaTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const catching = useRef(false)
   const world = useRef<World>(null!)
-  const draw = useRef<() => void>(() => {})
+  const draw = useRef<(night?: number) => void>(() => {})
   const view = useRef<View>({ x: 0, y: 0, scale: 1 })
   const controllerBlocked = directorOpen || !!clip || dragging
   const fewTools = starter && !allTools
@@ -290,7 +290,7 @@ export function App() {
       if (cursor.current?.controller !== undefined) cursor.current = null
     }
     addEventListener('blur', suspendController)
-    let frame = 0, acc = 0, prev = performance.now(), shownBpm = 0, shownCount: number | null = null, shownRec = 0, lastStatus = 0
+    let frame = 0, acc = 0, prev = performance.now(), nightLevel = live.current.settings.night ? 1 : 0, shownBpm = 0, shownCount: number | null = null, shownRec = 0, lastStatus = 0
     recorder.onDone = c => { setClip(c); setRecording(0); catching.current = false }
 
     function updateControllers(dt: number) {
@@ -504,7 +504,10 @@ export function App() {
       root.style.setProperty('--energy', energy.level.toFixed(3))
 
       drawAtmosphere(sky.current!.getContext('2d')!, w, now / 1000, settings.atmosphere)
-      draw.current()
+      nightLevel += ((settings.night ? 1 : 0) - nightLevel) * Math.min(1, dt * 3)
+      if (nightLevel < .002) nightLevel = 0
+      draw.current(nightLevel)
+      stage.current?.classList.toggle('night', nightLevel > .5)
       const placingNow = live.current.placing && ghost.current
       const cursors: BrushCursor[] = []
       if (!splash && !controllerPage && !recorder.active && !placingNow) {
@@ -522,7 +525,7 @@ export function App() {
       if (placingNow) drawGhost(fx, ghost.current!.canvas)
       if (recorder.active) {
         recorder.frame({ sky: sky.current!, base: base.current!, glow: glow.current!, bloom: bloom.current!, overlay: overlay.current! }, w, view.current,
-          settings.glow, [sx, sy])
+          settings.glow, [sx, sy], nightLevel)
         const left = Math.ceil(recorder.remaining())
         if (left !== shownRec) { shownRec = left; setRecording(left) }
       } else if (shownRec) { shownRec = 0; setRecording(0) }
@@ -704,6 +707,7 @@ export function App() {
       else if (key === 'u' && !e.repeat) retryDrop()
       else if (key === 'r') loadScene(world.current.scene)
       else if (key === 'f') toggleFullscreen()
+      else if (key === 'n') setSettings(s => ({ ...s, night: !s.night }))
       else if (key === 'escape') { setMixOpen(false); setMenu('none') }
     }
     addEventListener('keydown', onKey)
@@ -1132,6 +1136,11 @@ export function App() {
                   </label>
                 )
               })}
+              <div className="row-label">Lights</div>
+              <div className="seg">
+                <button className={settings.night ? '' : 'on'} onClick={() => setSettings(s => ({ ...s, night: false }))}>Day</button>
+                <button className={settings.night ? 'on' : ''} onClick={() => setSettings(s => ({ ...s, night: true }))}>Night · N</button>
+              </div>
               <div className="row-label">Crowd</div>
               <div className="seg">
                 <button className={settings.crowd ? 'on' : ''} onClick={() => setSettings(s => ({ ...s, crowd: true }))}>Ravers on</button>
@@ -1150,7 +1159,7 @@ export function App() {
                 <button onClick={exportWorld}>Export</button>
                 <button onClick={() => worldPicker.current?.click()}>Import</button>
               </div>
-              <button className="reset-mix" onClick={() => setSettings(s => ({ ...DEFAULT_SETTINGS, size: s.size, dropRumble: s.dropRumble, crowd: s.crowd }))}>Reset mix</button>
+              <button className="reset-mix" onClick={() => setSettings(s => ({ ...DEFAULT_SETTINGS, size: s.size, dropRumble: s.dropRumble, crowd: s.crowd, night: s.night }))}>Reset mix</button>
             </section>
           )}
         </div>
@@ -1177,6 +1186,12 @@ export function App() {
         <button hidden={starter} className={`tool ${placing ? 'on' : ''}`} title="Drop an image into the world (I). You can also drag one in or paste it." onClick={() => imagePicker.current?.click()}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="2" /><path d="m21 17-5-5-9 8" />
+          </svg>
+        </button>
+        <button className={`tool ${settings.night ? 'on' : ''}`} title={settings.night ? 'Lights on (N)' : 'Night mode (N)'} aria-pressed={settings.night}
+          onClick={() => setSettings(s => ({ ...s, night: !s.night }))}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" />
           </svg>
         </button>
         {canFullscreen && (

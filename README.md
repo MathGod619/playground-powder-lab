@@ -29,6 +29,10 @@ When you play a file, Powder Rave decodes the whole song and maps its kicks, hi-
 
 Tiny pixel ravers with glow sticks live in every world. They walk the terrain and step up small ledges, bob on every kick (some hop), wave on the hi-hats, and jump and cheer on the drop. Blasts, bombs, fireworks and speakers fling them; a hard landing leaves them dazed for a moment. Buried ravers climb out, ravers that fall in water swim to the surface, and anyone who touches fire or lava vanishes in a puff and walks back in from the edge a few seconds later. On the Moon they float; in Deep Sea they walk the seabed. Turn them off under **Mix → Crowd**.
 
+## Night mode
+
+Press **N**, the moon button in the dock, or **Mix → Lights → Night**. Everything that doesn't glow fades to moonlit blue-black, so only lava, fire, glitter, lit windows, sparks, speakers and the crowd's glow sticks show. Kicks lift the dark a little and the drop flash lights the whole world for a moment. Clips record it the way you see it.
+
 ## Materials
 
 Sand, Water, Wall, Fire, Oil, Lava, **Glitter** (takes the current beat colour, so painting in rhythm leaves rainbow layers), **Seed** (grows on the beat, flowers on the drop), **Speaker** and **Rocket** (launches and bursts into sparks and glitter). Lava and water make obsidian and steam. Fire burns oil and plants.

@@ -322,3 +322,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   .coach li { font-size: 12.5px }
 }
 @media (max-height: 500px) { .coach li small { display: none } }
+
+/* ---- night mode: the page behind the world goes dark too ---- */
+.stage.night { background: radial-gradient(130% 75% at 50% 115%, hsl(var(--hue) 90% calc(3% + var(--pulse) * 10%)), transparent 72%), #020106 }
+.stage.night .atmosphere { opacity: .35; transition: opacity .6s }
