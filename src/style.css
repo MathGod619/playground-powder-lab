@@ -163,9 +163,20 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .menu button.on b { color: var(--accent) }
 .menu b { font-size: 13px }
 .menu small { font-size: 11.5px; color: var(--dim); line-height: 1.35 }
-.menu.controller-help { width: min(220px, calc(100vw - 24px)); left: auto; right: 0; gap: 6px; padding: 10px; font-size: 13px; color: var(--dim) }
-.controller-help b { color: var(--ink) }
-@media (max-width: 640px) { .menu.controller-help { left: 0; right: auto } }
+.controller-dialog { inset: 0; margin: auto; width: min(490px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: hidden; padding: clamp(14px, 4vw, 24px); color: var(--ink); background: #171024; border: 1px solid var(--line); border-radius: 20px; box-shadow: 0 20px 75px #000b }
+.controller-dialog[open] { display: flex; flex-direction: column }
+.controller-dialog::backdrop { background: #06050acc; backdrop-filter: blur(6px) }
+.controller-dialog h2 { font: 800 clamp(18px, 4vw, 24px) Unbounded, sans-serif; margin-bottom: 16px }
+.controller-menu-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin }
+.controller-options { display: grid; gap: 6px }
+.controller-options button { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; min-height: 44px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); background: #ffffff08; text-align: left }
+.controller-options button:hover, .controller-options button:focus { background: #ffffff14; border-color: var(--accent) }
+.controller-options button:focus { outline: 2px solid var(--accent); outline-offset: -2px }
+.controller-options button:disabled { opacity: .55; cursor: default }
+.controller-options button[aria-current] strong { color: var(--accent) }
+.controller-options small, .controller-navigation, .controller-bindings dd { color: var(--dim); font-size: 14px; line-height: 1.3 }
+.controller-navigation { margin-top: 14px }
+.controller-bindings { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px 12px; margin-bottom: 16px; font-size: 14px }
 .seg.mode { display: inline-grid; padding: 3px; border-radius: 999px; background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(10px) }
 .seg.mode button { padding: 4px 12px; border-radius: 999px; font-size: 12px }
 .recbtn { padding: 6px 10px }

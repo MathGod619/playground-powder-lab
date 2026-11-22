@@ -42,7 +42,7 @@ export class AudioEngine {
       for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1
       Object.assign(this, { ctx, analyser, master, noise, tap })
     }
-    if (this.ctx!.state === 'suspended') void this.ctx!.resume()
+    if (this.ctx!.state === 'suspended') void this.ctx!.resume().catch(() => {})
     return { ctx: this.ctx!, analyser: this.analyser!, master: this.master! }
   }
 
@@ -57,6 +57,13 @@ export class AudioEngine {
     this.stop()
     this.stopCurrent = startDemo(ctx, master, this.noise!)
     this.mode = 'demo'
+  }
+
+  get demoNeedsActivation() { return this.mode === 'demo' && this.ctx?.state === 'suspended' }
+
+  async enableDemoSound() {
+    if (!this.demoNeedsActivation) return
+    try { await this.ctx?.resume() } catch { /* the browser still requires a user gesture */ }
   }
 
   async playFile(file: File) {

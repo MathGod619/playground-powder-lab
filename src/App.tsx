@@ -4,6 +4,7 @@ import { MapPlayer } from './analysis.ts'
 import { AudioEngine, type SourceMode } from './audio.ts'
 import { BeatDetector } from './detector.ts'
 import { CONTROL, Controller } from './controller.ts'
+import { ControllerMenu, moveControllerFocus, type ControllerPage } from './ControllerMenu.tsx'
 import { Director } from './Director.tsx'
 import type { ScenePlan } from './director-plan.ts'
 import { automaticDrops, beatOffset, MusicEnvelope, RaveSession, type DropResult } from './immersion.ts'
@@ -17,10 +18,10 @@ import { buildScene, gridFor, SCENES, WORLD_SIZES, type WorldSize } from './scen
 import { readLocal, writeLocal } from './storage.ts'
 import { DEFAULT_REACTIONS, World, type Reactions, type SceneId } from './world.ts'
 
-type Settings = { reactions: Reactions; glow: number; sensitivity: number; size: WorldSize; atmosphere: number }
+type Settings = { reactions: Reactions; glow: number; sensitivity: number; size: WorldSize; atmosphere: number; dropRumble: boolean }
 type Cell = { x: number; y: number }
 const SETTINGS_KEY = 'powder-rave-settings-v1'
-const DEFAULT_SETTINGS: Settings = { reactions: DEFAULT_REACTIONS, glow: 1, sensitivity: 1, size: 'medium', atmosphere: 1 }
+const DEFAULT_SETTINGS: Settings = { reactions: DEFAULT_REACTIONS, glow: 1, sensitivity: 1, size: 'medium', atmosphere: 1, dropRumble: true }
 const MAX_BRUSH = 30
 const CLIP_SECONDS = 10
 const STEP_MS = 1000 / 60
@@ -59,6 +60,7 @@ export function App() {
   const [paused, setPaused] = useState(false)
   const [scene, setScene] = useState<SceneId>('garden')
   const [source, setSource] = useState<SourceMode | null>(null)
+  const [soundLocked, setSoundLocked] = useState(false)
   const [bpm, setBpm] = useState(0)
   const [mixOpen, setMixOpen] = useState(false)
   const [toast, setToast] = useState({ text: '', id: 0 })
@@ -72,9 +74,11 @@ export function App() {
   const [dropReady, setDropReady] = useState(false)
   const [rave, setRave] = useState({ active: false, finished: false, charge: 0, drops: 0, score: 0, seconds: 90, scoring: false })
   const [result, setResult] = useState<DropResult | null>(null)
-  const [menu, setMenu] = useState<'none' | 'scenes' | 'rec' | 'controller'>('none')
+  const [menu, setMenu] = useState<'none' | 'scenes' | 'rec'>('none')
   const [fullscreen, setFullscreen] = useState(false)
   const [controllerConnected, setControllerConnected] = useState(false)
+  const [controllerPage, setControllerPage] = useState<ControllerPage | null>(null)
+  const [rumbleAvailable, setRumbleAvailable] = useState(false)
   const [directorOpen, setDirectorOpen] = useState(false)
   const [canDirectorUndo, setCanDirectorUndo] = useState(false)
   const imageBounds = useRef<{ world: World; x: number; y: number; w: number; h: number } | null>(null)
@@ -99,6 +103,7 @@ export function App() {
 
   const stage = useRef<HTMLDivElement>(null)
   const dock = useRef<HTMLElement>(null)
+  const controllerDialog = useRef<HTMLDialogElement>(null)
   const layer = useRef<HTMLDivElement>(null)
   const base = useRef<HTMLCanvasElement>(null)
   const glow = useRef<HTMLCanvasElement>(null)
@@ -111,6 +116,7 @@ export function App() {
   const [audio] = useState(() => new AudioEngine())
   const [detector] = useState(() => new BeatDetector())
   const [recorder] = useState(() => new ClipRecorder())
+  const [controller] = useState(() => new Controller())
   const mapPlayer = useRef<MapPlayer | null>(null)
   const mapToken = useRef(0)
   const dropAt = useRef(-99)
@@ -118,9 +124,9 @@ export function App() {
   const world = useRef<World>(null!)
   const draw = useRef<() => void>(() => {})
   const view = useRef<View>({ x: 0, y: 0, scale: 1 })
-  const controllerBlocked = splash || directorOpen || !!clip || dragging
-  const live = useRef({ tool, brush, paused, settings, splash, armed, placing: !!placing, controllerBlocked })
-  live.current = { tool, brush, paused, settings, splash, armed, placing: !!placing, controllerBlocked }
+  const controllerBlocked = directorOpen || !!clip || dragging
+  const live = useRef({ tool, brush, paused, settings, splash, armed, placing: !!placing, controllerBlocked, controllerPage })
+  live.current = { tool, brush, paused, settings, splash, armed, placing: !!placing, controllerBlocked, controllerPage }
   const stroke = useRef<{ id: number; erase: boolean; last: Cell } | null>(null)
   const cursor = useRef<{ sx: number; sy: number; controller?: true } | null>(null)
 
@@ -160,7 +166,7 @@ export function App() {
   }
 
   function triggerDrop(manual = true) {
-    if (live.current.paused) return
+    if (live.current.paused || live.current.controllerPage) return
     const challenge = session.current
     if (challenge.active) {
       if (!manual) return
@@ -176,7 +182,8 @@ export function App() {
     }
     dropAt.current = performance.now() / 1000
     if (recorder.active && catching.current) { recorder.endIn(6); catching.current = false }
-    world.current.drop(live.current.paused)
+    world.current.drop(false)
+    if (live.current.settings.dropRumble && document.hasFocus()) void controller.rumbleDrop()
     setDrops(n => n + 1)
     const el = layer.current
     if (el) {
@@ -192,8 +199,7 @@ export function App() {
     const root = document.documentElement
     const fx = overlay.current!.getContext('2d')!
     const sctx = spec.current!.getContext('2d')!
-    const controller = new Controller()
-    let connected = false
+    let connected = false, hadRumble = false, menuStick = 0, shownSoundLock = false
     let controllerStroke: { world: World; last: Cell; erase: boolean } | null = null
     const suspendController = () => {
       controller.suspend()
@@ -207,21 +213,50 @@ export function App() {
     function updateController(dt: number) {
       const previousStroke = controllerStroke
       controllerStroke = null
-      const { controllerBlocked, placing, tool, splash } = live.current
+      const { controllerBlocked, placing, tool, splash, controllerPage } = live.current
       const blocked = controllerBlocked || !!stroke.current || !document.hasFocus()
-      const input = controller.read(blocked)
+      const input = controller.read(blocked, splash ? CONTROL.confirm | CONTROL.pause : 0)
       if (connected !== !!input) {
         connected = !!input
         setControllerConnected(connected)
-        if (!connected) setMenu(m => m === 'controller' ? 'none' : m)
-        else if (!splash) say('Controller connected. Press the Controller button to see the controls.')
+        if (connected && !splash) say('Controller connected. Y / Triangle opens the menu.')
+      }
+      if (hadRumble !== controller.canRumble) {
+        hadRumble = controller.canRumble
+        setRumbleAvailable(hadRumble)
       }
       if (!input || blocked) {
         if (cursor.current?.controller) cursor.current = null
         return
       }
 
-      const { held, pressed, x, y } = input
+      const { held, pressed, aim, fineAim } = input
+      if (splash) {
+        if (pressed & (CONTROL.confirm | CONTROL.pause)) start(true)
+        return
+      }
+      if (pressed && audio.demoNeedsActivation && navigator.userActivation?.isActive) void audio.enableDemoSound()
+
+      const direction = Math.abs(aim.y) > .55 ? Math.sign(aim.y) : 0
+      const stickStep = direction !== menuStick ? direction : 0
+      menuStick = direction
+      if (controllerPage) {
+        const dialog = controllerDialog.current
+        if (pressed & CONTROL.menu) changeControllerPage(null)
+        else if (pressed & CONTROL.back) changeControllerPage(controllerPage === 'main' ? null : 'main')
+        else if (dialog) {
+          const step = Number(!!(pressed & CONTROL.shrink)) - Number(!!(pressed & CONTROL.grow)) || stickStep
+          if (step) moveControllerFocus(dialog, step)
+          else if (pressed & CONTROL.confirm) {
+            const focused = document.activeElement
+            if (focused instanceof HTMLButtonElement && dialog.contains(focused)) focused.click()
+          }
+        }
+        return
+      }
+      if (!placing && (pressed & CONTROL.menu)) { changeControllerPage('main'); return }
+
+      const { x, y } = aim.x || aim.y ? aim : { x: fineAim.x * .28, y: fineAim.y * .28 }
       const erase = !!(held & CONTROL.erase)
       const paint = !!(held & CONTROL.paint)
       const action = erase ? CONTROL.erase : CONTROL.paint
@@ -239,7 +274,7 @@ export function App() {
       if (placing) {
         if (pressed & CONTROL.erase) setPlacing(null)
         else if (pressed & CONTROL.paint) placeLatest.current()
-        else if (pressed & CONTROL.fullScreen) setFillScreen(full => !full)
+        else if (pressed & CONTROL.menu) setFillScreen(full => !full)
         else if (size) resizeImage(size * 8)
         return
       }
@@ -272,7 +307,8 @@ export function App() {
 
     const loop = (now: number) => {
       const w = world.current
-      const { tool, brush, paused, settings, splash, armed } = live.current
+      const { tool, brush, settings, splash, armed, controllerPage } = live.current
+      const paused = live.current.paused || !!controllerPage
       const dt = Math.min(100, now - prev) / 1000
       acc += dt * 1000
       prev = now
@@ -307,6 +343,7 @@ export function App() {
       }
 
       updateController(dt)
+      if (w !== world.current) { frame = requestAnimationFrame(loop); return }
       for (let n = 0; acc >= STEP_MS && n < 2; n++) {
         acc -= STEP_MS
         if (!paused) w.step()
@@ -317,6 +354,8 @@ export function App() {
       w.decay()
       if (now - lastStatus > 250) {
         lastStatus = now
+        const locked = !!audio.demoNeedsActivation
+        if (locked !== shownSoundLock) { shownSoundLock = locked; setSoundLocked(locked) }
         const r = session.current
         if (r.scoring) { r.observe(w.census()); if (r.result) setResult({ ...r.result }) }
         setRave({ active: r.active, finished: r.finished, charge: r.charge, drops: r.drops, score: r.score, seconds: Math.ceil(r.seconds), scoring: r.scoring })
@@ -332,7 +371,7 @@ export function App() {
       drawAtmosphere(sky.current!.getContext('2d')!, w, now / 1000, settings.atmosphere)
       draw.current()
       const placingNow = live.current.placing && ghost.current
-      drawOverlay(fx, w, view.current, overlay.current!.width / innerWidth, splash || recorder.active || placingNow ? null : cursor.current, brush, tool)
+      drawOverlay(fx, w, view.current, overlay.current!.width / innerWidth, splash || controllerPage || recorder.active || placingNow ? null : cursor.current, brush, tool)
       if (placingNow) drawGhost(fx, ghost.current!.canvas)
       if (recorder.active) {
         recorder.frame({ sky: sky.current!, base: base.current!, glow: glow.current!, bloom: bloom.current!, overlay: overlay.current! }, w, view.current,
@@ -442,6 +481,7 @@ export function App() {
       setPlacing(bitmap)
       setMixOpen(false)
       setMenu('none')
+      setControllerPage(null)
       setSplash(false)
     } catch {
       say('That image could not be opened.')
@@ -485,9 +525,18 @@ export function App() {
   // Keyboard
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (live.current.splash || e.metaKey || e.ctrlKey || e.altKey) return
+      if (live.current.controllerPage || e.metaKey || e.ctrlKey || e.altKey) return
       if ((e.target as HTMLElement)?.closest?.('input, textarea, select, [contenteditable]')) return
       const key = e.key.toLowerCase()
+      if (live.current.splash) {
+        if (key === 'enter' && !e.repeat) { e.preventDefault(); start() }
+        return
+      }
+      if (key === 'enter' && audio.demoNeedsActivation) {
+        e.preventDefault()
+        void audio.enableDemoSound()
+        return
+      }
       if (live.current.placing) {
         if (key === 'escape') setPlacing(null)
         else if (key === '[' || key === '-') resizeImage(-6)
@@ -511,6 +560,11 @@ export function App() {
   }, [])
 
   // ---------------------------------------------------------------- actions
+
+  function changeControllerPage(page: ControllerPage | null) {
+    setControllerPage(page)
+    if (page === 'main') { setMenu('none'); setMixOpen(false) }
+  }
 
   function loadScene(id: SceneId) {
     if (session.current.active) { say('Finish the Rave or return to Sandbox to change worlds.'); return }
@@ -594,12 +648,16 @@ export function App() {
     } catch { /* cancelled */ }
   }
 
-  function start() {
+  function start(withController = false) {
     setSplash(false)
-    audio.playDemo()
-    detector.reset()
-    setSource('demo')
-    setTimeout(() => say('Paint with the dock. Right-click erases. Wait for the drop.'), 600)
+    try {
+      audio.playDemo()
+      detector.reset()
+      setSource('demo')
+      say(withController
+        ? 'Left stick aims. A / Cross paints. Y / Triangle opens the menu.'
+        : 'Paint with the dock. Right-click erases. Wait for the drop.')
+    } catch (error) { say(describe(error)) }
   }
 
   function startRave() {
@@ -796,17 +854,7 @@ export function App() {
               <button className={rave.active || rave.finished ? 'on' : ''} onClick={startRave}>Rave</button>
             </div>
             {controllerConnected && (
-              <div className="menu-wrap">
-                <button className={`chip ${menu === 'controller' ? 'on' : ''}`} aria-expanded={menu === 'controller'}
-                  onClick={() => { setMenu(m => m === 'controller' ? 'none' : 'controller'); setMixOpen(false) }}>Controller</button>
-                {menu === 'controller' && (
-                  <section className="menu controller-help" aria-label="Controller controls">
-                    <p><b>Left stick</b> aim · <b>LB/RB or L1/R1</b> switch tools</p>
-                    <p><b>A/Cross or RT/R2</b> paint · <b>B/Circle or LT/L2</b> erase</p>
-                    <p><b>D-pad up/down</b> resize · <b>X/Square</b> drop · <b>Start/Options</b> freeze</p>
-                  </section>
-                )}
-              </div>
+              <button className="chip" aria-haspopup="dialog" onClick={() => changeControllerPage('main')}>Controller</button>
             )}
           </div>
         </div>
@@ -818,6 +866,7 @@ export function App() {
               </button>
             ))}
           </div>
+          {soundLocked && !splash && <button className="chip on" onClick={() => void audio.enableDemoSound()}>Enable sound · Enter</button>}
           <div className="meter">
             <canvas ref={spec} width={264} height={60} className="spec" />
             <i className="dot" />
@@ -880,7 +929,7 @@ export function App() {
                 <button onClick={exportWorld}>Export</button>
                 <button onClick={() => worldPicker.current?.click()}>Import</button>
               </div>
-              <button className="reset-mix" onClick={() => setSettings(s => ({ ...DEFAULT_SETTINGS, size: s.size }))}>Reset mix</button>
+              <button className="reset-mix" onClick={() => setSettings(s => ({ ...DEFAULT_SETTINGS, size: s.size, dropRumble: s.dropRumble }))}>Reset mix</button>
             </section>
           )}
         </div>
@@ -1013,13 +1062,20 @@ export function App() {
       }} />
       <input ref={worldPicker} type="file" accept="application/json,.json" hidden onChange={importWorld} />
 
+      <ControllerMenu dialog={controllerDialog} page={controllerPage} scene={scene} raveActive={rave.active}
+        raveFinished={rave.finished} rumble={settings.dropRumble} onPage={changeControllerPage}
+        onWorld={id => { loadScene(id); changeControllerPage(null) }}
+        onRave={() => { startRave(); changeControllerPage(null) }}
+        onSandbox={() => { leaveRave(); changeControllerPage(null) }}
+        onRumble={rumbleAvailable ? () => setSettings(s => ({ ...s, dropRumble: !s.dropRumble })) : undefined} />
+
       {splash && (
         <div className="splash">
           <div className="inner">
             <h1>POWDER<br />RAVE</h1>
             <p>A falling-sand world that hears your music. Kicks make the ground jump, speakers blast the dirt around, and the drop sets everything off.</p>
-            <button className="start" onClick={start}>DROP THE BEAT</button>
-            <small>{controllerConnected ? 'Controller connected. Start the game to play.' : 'Sound on. You can also drag any audio file onto the page.'}</small>
+            <button className="start" onClick={() => start()}>DROP THE BEAT</button>
+            <small>{controllerConnected ? 'Press A / Cross or Start / Options to play.' : 'Press Enter, or connect a controller and press A / Cross to play.'}</small>
           </div>
         </div>
       )}

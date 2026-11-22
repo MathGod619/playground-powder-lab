@@ -45,7 +45,9 @@ Explosions smash walls, brick and speakers into gravel and throw everything else
 - **Clip** opens a menu: record 10 seconds now, or **Catch the next drop**, which arms a recording that starts during the build-up (or 5 s before a mapped drop) and ends 6 s after the drop, so the clip is built around the drop. When it's done you can watch it, download it (MP4 where the browser supports it, otherwise WebM), or share it.
 - The world name at the top left opens the world list.
 - **Mix** has sliders for each reaction, atmosphere, glow and beat sensitivity (raise it for a quiet mic), the world detail level (Chunky / Normal / Fine), and Save / Load / Export / Import.
-- Connect a standard controller over USB or Bluetooth, then press a button with the game tab focused. Use the **left stick** to aim, **A / Cross** or **RT / R2** to paint, **B / Circle** or **LT / L2** to erase, and the bumpers to cycle tools. **D-pad up/down** changes brush size, **X / Square** triggers a drop, and **Start / Options** freezes or resumes the world.
+- Connect a standard controller over USB or Bluetooth and press **A / Cross** or **Start / Options** with the game tab focused to start. **Y / Triangle** opens the controller menu for worlds, Rave Mode, and the controls guide. Use the **D-pad** or **left stick** to move, **A / Cross** to select, and **B / Circle** to go back.
+- Use the **left stick** to aim, the **right stick** for fine aim, **A / Cross** or **RT / R2** to paint, **B / Circle** or **LT / L2** to erase, and the bumpers to cycle tools. **D-pad up/down** changes brush size, **X / Square** triggers a drop, and **Start / Options** freezes or resumes the world. On supported controllers, drops rumble. You can turn rumble off in the controller menu.
+- If your browser asks for an audio gesture after a controller start, press **Enter** to enable the demo track.
 
 ## Drop in your own images
 

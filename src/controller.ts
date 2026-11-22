@@ -2,15 +2,25 @@ export const CONTROL = {
   paint: 1 << 0,
   erase: 1 << 1,
   drop: 1 << 2,
-  fullScreen: 1 << 3,
+  menu: 1 << 3,
   previousTool: 1 << 4,
   nextTool: 1 << 5,
   pause: 1 << 6,
   grow: 1 << 7,
   shrink: 1 << 8,
+  confirm: 1 << 9,
+  back: 1 << 10,
 } as const
 
 const DEAD_ZONE = .2
+type RumbleActuator = GamepadHapticActuator & { readonly effects?: readonly GamepadHapticEffectType[] }
+
+function stick(x = 0, y = 0) {
+  const length = Math.hypot(x, y)
+  if (length <= DEAD_ZONE) return { x: 0, y: 0 }
+  const scale = (Math.min(length, 1) - DEAD_ZONE) / ((1 - DEAD_ZONE) * length)
+  return { x: x * scale, y: y * scale }
+}
 
 /** Reads the browser's standard Xbox/PlayStation-style layout. */
 export class Controller {
@@ -18,10 +28,25 @@ export class Controller {
   private previous = 0
   private suppressed = 0
   private unavailable = false
+  private actuator: RumbleActuator | undefined
 
-  suspend() { this.index = -1 }
+  suspend() {
+    this.index = -1
+    this.actuator = undefined
+  }
 
-  read(blocked: boolean) {
+  get canRumble() {
+    return !!this.actuator?.playEffect && (this.actuator.effects?.includes('dual-rumble') ?? true)
+  }
+
+  async rumbleDrop() {
+    if (!this.canRumble) return
+    try {
+      await this.actuator?.playEffect('dual-rumble', { duration: 240, strongMagnitude: .85, weakMagnitude: .5 })
+    } catch { /* the controller disconnected or declined the effect */ }
+  }
+
+  read(blocked: boolean, wakeActions = 0) {
     if (this.unavailable || !navigator.getGamepads) return null
     let pads: ReturnType<Navigator['getGamepads']>
     try {
@@ -35,22 +60,25 @@ export class Controller {
     const current = pads[this.index]
     const pad = standard(current) ? current : pads.find(standard)
     if (!pad) { this.suspend(); return null }
+    this.actuator = pad.vibrationActuator
 
     const down = (index: number) => pad.buttons[index]?.pressed
     let buttons = 0
+    if (down(0)) buttons |= CONTROL.confirm
+    if (down(1)) buttons |= CONTROL.back
     if (down(0) || down(7)) buttons |= CONTROL.paint
     if (down(1) || down(6)) buttons |= CONTROL.erase
     if (down(2)) buttons |= CONTROL.drop
-    if (down(3)) buttons |= CONTROL.fullScreen
+    if (down(3)) buttons |= CONTROL.menu
     if (down(4)) buttons |= CONTROL.previousTool
     if (down(5)) buttons |= CONTROL.nextTool
     if (down(9)) buttons |= CONTROL.pause
     if (down(12)) buttons |= CONTROL.grow
     if (down(13)) buttons |= CONTROL.shrink
 
-    // A wake-up press or a button held through a dialog must be released before it can act.
+    // Only the welcome screen accepts specific wake-up presses. Never replay blocked input.
     if (this.index !== pad.index || blocked) {
-      this.suppressed = buttons
+      this.suppressed = blocked ? buttons : buttons & ~wakeActions
       this.previous = 0
       this.index = pad.index
     }
@@ -59,9 +87,7 @@ export class Controller {
     const pressed = held & ~this.previous
     this.previous = held
 
-    const x = pad.axes[0] ?? 0, y = pad.axes[1] ?? 0
-    const length = Math.hypot(x, y)
-    const scale = blocked || length <= DEAD_ZONE ? 0 : (Math.min(length, 1) - DEAD_ZONE) / ((1 - DEAD_ZONE) * length)
-    return { held, pressed, x: x * scale, y: y * scale }
+    const axes = blocked ? [] : pad.axes
+    return { held, pressed, aim: stick(axes[0], axes[1]), fineAim: stick(axes[2], axes[3]) }
   }
 }
