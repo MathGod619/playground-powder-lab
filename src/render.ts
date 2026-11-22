@@ -1,5 +1,6 @@
 import { FIRE_PALETTE, half, hsl } from './color.ts'
 import { BLAST, BOMB_DROP_ONLY, ERASE, GLOWS, M, type Tool } from './materials.ts'
+import type { ChallengeMarker } from './rave-challenges.ts'
 import type { World } from './world.ts'
 
 export type View = { x: number; y: number; scale: number }
@@ -83,7 +84,7 @@ const bombLabels: number[] = []
 export const blastRadius = (brush: number) => Math.round(brush * 1.4 + 4)
 
 /** Screen-space overlay: shockwave rings, the brush cursor and the drop flash. */
-export function drawOverlay(ctx: CanvasRenderingContext2D, world: World, view: View, dpr: number, cursors: BrushCursor[]) {
+export function drawOverlay(ctx: CanvasRenderingContext2D, world: World, view: View, dpr: number, cursors: BrushCursor[], markers: readonly ChallengeMarker[] = []) {
   const s = view.scale * dpr, ox = view.x * dpr, oy = view.y * dpr
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
@@ -126,6 +127,17 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, world: World, view: V
       const fuse = world.life[i], x = ox + (i % world.width + .5) * s, y = oy + ((i / world.width | 0) - 1.2) * s
       ctx.fillStyle = fuse <= 3 ? '#ff5a6e' : 'rgba(255,255,255,.85)'
       ctx.fillText(String(fuse), x, y)
+    }
+  }
+  if (markers.length) {
+    ctx.font = `700 ${13 * dpr}px "Space Mono", monospace`
+    ctx.textAlign = 'center'
+    ctx.lineWidth = 4 * dpr
+    ctx.strokeStyle = '#0e0a18'
+    ctx.fillStyle = '#b0f2d8'
+    for (const { x, y, label } of markers) {
+      ctx.strokeText(label, ox + x * s, oy + y * s + 13 * dpr)
+      ctx.fillText(label, ox + x * s, oy + y * s + 13 * dpr)
     }
   }
   for (const { sx, sy, brush, tool, player } of cursors) {

@@ -38,6 +38,16 @@ export function beatOffset(time: number, lastKick: number, period: number) {
 }
 
 export type DropResult = { grade: Grade; points: number; drop: number }
+export type RaveObjective = {
+  dropLimit: number
+  target: number
+  chargeSeconds?: number
+  impactSeconds?: number
+  measure: () => number
+  beforeDrop?: () => void
+  afterDrop?: (drop: number) => void
+}
+type RaveOutcome = 'cleared' | 'failed' | 'timeout'
 
 const IMPACT_SECONDS = 3
 const BASE_POINTS = 500
@@ -56,42 +66,85 @@ export class RaveSession {
   seconds = 90
   /** The drop being scored right now (or the last one), for the on-screen popup. */
   result: DropResult | null = null
+  outcome: RaveOutcome | null = null
+  objectiveProgress = 0
+  private objective: RaveObjective | null = null
   private clock = 0
   private impactUntil = -1
   private baseline: Census | null = null
   private peakAir = 0
   private banked = 0
 
-  start() {
+  start(objective: RaveObjective | null = null) {
     this.active = true; this.finished = false; this.charge = 0; this.drops = 0; this.score = 0; this.seconds = 90
     this.result = null; this.clock = 0; this.impactUntil = -1; this.baseline = null; this.banked = 0
+    this.objective = objective
+    this.objectiveProgress = objective?.measure() ?? 0
+    this.outcome = null
+  }
+
+  leave() {
+    this.active = this.finished = false
+    this.objective = null
+    this.result = this.outcome = null
+    this.impactUntil = -1
+  }
+
+  get dropLimit() { return this.objective?.dropLimit ?? 3 }
+  get objectiveTarget() { return this.objective?.target ?? 0 }
+  get status() {
+    const { active, finished, charge, drops, score, seconds, scoring, dropLimit, objectiveProgress, objectiveTarget, outcome } = this
+    return { active, finished, charge, drops, score, seconds: Math.ceil(seconds), scoring, dropLimit, objectiveProgress, objectiveTarget, outcome }
+  }
+
+  private finish(outcome: RaveOutcome) {
+    this.active = false
+    this.finished = true
+    this.outcome = outcome
   }
 
   get scoring() { return this.clock < this.impactUntil }
 
   tick(dt: number, energy: number) {
     if (!this.active) return
+    const wasScoring = this.scoring
     this.clock += dt
-    if (this.drops < 3) {
+    if (this.drops < this.dropLimit) {
       this.seconds = Math.max(0, this.seconds - dt)
-      if (!this.scoring) this.charge = Math.min(1, this.charge + dt * energy / 6)
+      if (!this.scoring) {
+        const available = wasScoring ? this.clock - this.impactUntil : dt
+        this.charge = Math.min(1, this.charge + available * energy / (this.objective?.chargeSeconds ?? 6))
+      }
     }
-    const timeUp = this.seconds === 0 || this.drops === 3
-    if (timeUp && !this.scoring) { this.active = false; this.finished = true }
+    if (wasScoring && !this.scoring && this.objective) {
+      this.objectiveProgress = this.objective.measure()
+      if (this.objectiveProgress < this.objective.target) { this.finish('failed'); return }
+    }
+    if (!this.scoring) {
+      if (this.drops === this.dropLimit) this.finish('cleared')
+      else if (this.seconds === 0) this.finish('timeout')
+    }
   }
 
   /** Fires a drop if charged. `offset` is seconds from the nearest beat. */
   drop(offset: number, census: Census) {
-    if (!this.active || this.charge < 1 || this.drops >= 3 || this.seconds === 0) return null
+    if (!this.active || this.scoring || this.charge < 1 || this.drops >= this.dropLimit || this.seconds === 0) return null
+    this.objective?.beforeDrop?.()
     this.charge = 0
     this.drops++
     this.baseline = { ...census }
     this.peakAir = census.airborne
-    this.impactUntil = this.clock + IMPACT_SECONDS
+    this.impactUntil = this.clock + (this.objective?.impactSeconds ?? IMPACT_SECONDS)
     this.banked = this.score
     this.result = { grade: gradeTiming(offset), points: 0, drop: this.drops }
     this.observe(census)
     return this.result
+  }
+
+  applyDropEffects() { this.objective?.afterDrop?.(this.drops) }
+
+  observeObjective() {
+    if (this.active && this.objective) this.objectiveProgress = this.objective.measure()
   }
 
   /** Call a few times a second; while a drop is being scored, its points climb with the damage. */

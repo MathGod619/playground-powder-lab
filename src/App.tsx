@@ -14,6 +14,7 @@ import { drawAtmosphere } from './atmosphere.ts'
 import { coverCrop, fitSize, IMAGE_MODES, removeBackground, stampImage, type ImageMode, type Pixels } from './image.ts'
 import { BLAST, isBeatTool, isClickTool, isSolidTool, M, PADS, type Tool } from './materials.ts'
 import { ClipRecorder, canRecord, type Clip } from './recorder.ts'
+import { prepareChallenge, RAVE_MODES, type RaveMode } from './rave-challenges.ts'
 import { blastRadius, createRenderer, drawOverlay, type BrushCursor, type Cursor, type View } from './render.ts'
 import { decodeWorld, encodeWorld, MAX_FILE_BYTES, SAVE_KEY } from './save.ts'
 import { buildScene, gridFor, SCENES, WORLD_SIZES, type WorldSize } from './scenes.ts'
@@ -80,7 +81,12 @@ export function App() {
   const [clip, setClip] = useState<Clip | null>(null)
   const [mapped, setMapped] = useState<'none' | 'analysing' | 'ready'>('none')
   const [dropReady, setDropReady] = useState(false)
-  const [rave, setRave] = useState({ active: false, finished: false, charge: 0, drops: 0, score: 0, seconds: 90, scoring: false })
+  const session = useRef(new RaveSession())
+  const [rave, setRave] = useState(() => session.current.status)
+  const [raveMode, setRaveMode] = useState<RaveMode>('freestyle')
+  const runningMode = useRef<RaveMode>('freestyle')
+  const challenge = useRef<ReturnType<typeof prepareChallenge>>(null)
+  const ravePickerFromMenu = useRef(false)
   const [result, setResult] = useState<DropResult | null>(null)
   const [menu, setMenu] = useState<'none' | 'scenes' | 'rec' | 'beats'>('none')
   const [fullscreen, setFullscreen] = useState(false)
@@ -107,7 +113,6 @@ export function App() {
   const canFullscreen = typeof document !== 'undefined' && !!document.fullscreenEnabled
   /** Last kick and beat length, on the same clock the drop button is read against. */
   const beat = useRef({ last: -Infinity, period: 0 })
-  const session = useRef(new RaveSession())
   const envelope = useRef(new MusicEnvelope())
   const sky = useRef<HTMLCanvasElement>(null)
 
@@ -186,6 +191,7 @@ export function App() {
     if (live.current.paused || live.current.controllerPage) return
     if (!manual && performance.now() - lastManualDrop.current < 450) return
     const challenge = session.current
+    if (challenge.finished) return
     if (challenge.active) {
       if (!manual) return
       if (challenge.charge < 1) { say('Still charging. Let the music fill the meter.'); return }
@@ -206,6 +212,7 @@ export function App() {
     }
     if (recorder.active && catching.current) { recorder.endIn(6); catching.current = false }
     world.current.drop(false)
+    if (challenge.active) challenge.applyDropEffects()
     if (live.current.settings.dropRumble && document.hasFocus()) for (const controller of controllers) void controller.rumbleDrop()
     const el = layer.current
     if (el) {
@@ -291,7 +298,7 @@ export function App() {
       if (controllerPage) {
         const dialog = controllerDialog.current
         if (pressed & CONTROL.menu) changeControllerPage(null)
-        else if (pressed & CONTROL.back) changeControllerPage(controllerPage === 'main' ? null : 'main')
+        else if (pressed & CONTROL.back) backControllerPage(controllerPage)
         else if (dialog) {
           const step = Number(!!(pressed & CONTROL.shrink)) - Number(!!(pressed & CONTROL.grow)) || stickSteps[0] || stickSteps[1]
           if (step) moveControllerFocus(dialog, step)
@@ -422,13 +429,14 @@ export function App() {
       if (events.drop && automaticDrops(audio.mode, session.current.active || session.current.finished)) triggerDrop(false)
       const strokes = seats.flatMap(seat => seat.stroke ? [seat.stroke] : [])
       if (stroke.current) strokes.push({ ...stroke.current, tool, brush, world: w })
-      if (beats.kick || beats.hat) for (const s of strokes) {
+      const editingLocked = runningMode.current === 'skyline' && session.current.scoring
+      if (!editingLocked && (beats.kick || beats.hat)) for (const s of strokes) {
         if (!s.erase && isBeatTool(s.tool)) paintBeatBrush(w, s.last.x, s.last.y, s.brush, s.tool, beats)
       }
       for (let n = 0; acc >= STEP_MS && n < 2; n++) {
         acc -= STEP_MS
         if (!paused) w.step()
-        for (const s of strokes) {
+        if (!editingLocked) for (const s of strokes) {
           if (s.erase || (!isSolidTool(s.tool) && !isClickTool(s.tool) && !isBeatTool(s.tool))) {
             w.paint(s.last.x, s.last.y, s.brush, s.tool, s.erase)
           }
@@ -442,7 +450,8 @@ export function App() {
         if (locked !== shownSoundLock) { shownSoundLock = locked; setSoundLocked(locked) }
         const r = session.current
         if (r.scoring) { r.observe(w.census()); if (r.result) setResult({ ...r.result }) }
-        setRave({ active: r.active, finished: r.finished, charge: r.charge, drops: r.drops, score: r.score, seconds: Math.ceil(r.seconds), scoring: r.scoring })
+        r.observeObjective()
+        setRave(r.status)
       }
 
       const shake = w.pulse.shake, sx = (Math.random() - .5) * shake, sy = (Math.random() - .5) * shake
@@ -467,7 +476,7 @@ export function App() {
           cursors.push({ ...(point.controller === 0 ? seats[0].point ?? point : point), tool, brush })
         }
       }
-      drawOverlay(fx, w, view.current, overlay.current!.width / innerWidth, cursors)
+      drawOverlay(fx, w, view.current, overlay.current!.width / innerWidth, cursors, challenge.current?.markers)
       if (placingNow) drawGhost(fx, ghost.current!.canvas)
       if (recorder.active) {
         recorder.frame({ sky: sky.current!, base: base.current!, glow: glow.current!, bloom: bloom.current!, overlay: overlay.current! }, w, view.current,
@@ -567,9 +576,11 @@ export function App() {
   }
 
   async function openImage(file: File) {
+    if (session.current.active && challenge.current) { say('Return to Sandbox to add an image.'); return }
     if (!file.type.startsWith('image/')) { say('That is not an image.'); return }
     try {
       const bitmap = await createImageBitmap(file)
+      if (session.current.active && challenge.current) { bitmap.close(); return }
       const w = world.current
       // start at a size that fits comfortably: under half the width and 70% of the height
       const width = Math.round(Math.min(w.width * .45, w.height * .7 * bitmap.width / bitmap.height))
@@ -664,6 +675,18 @@ export function App() {
     if (page === 'main') { setMenu('none'); setMixOpen(false) }
   }
 
+  function openRavePicker(fromMenu = false) {
+    if (session.current.active) return
+    ravePickerFromMenu.current = fromMenu
+    changeControllerPage('raves')
+    setMenu('none')
+    setMixOpen(false)
+  }
+
+  function backControllerPage(page: ControllerPage) {
+    changeControllerPage(page === 'main' || (page === 'raves' && !ravePickerFromMenu.current) ? null : 'main')
+  }
+
   function resetBeats() {
     detector.reset()
     heardKicks.current = 0
@@ -671,11 +694,13 @@ export function App() {
 
   function loadScene(id: SceneId) {
     if (session.current.active) { say('Finish the Rave or return to Sandbox to change worlds.'); return }
+    if (session.current.finished) leaveRave()
     install(makeWorld(live.current.settings.size, id))
   }
 
   function changeSize(size: WorldSize) {
     if (session.current.active) { say('Finish the Rave before changing world detail.'); return }
+    if (session.current.finished) leaveRave()
     setSettings(s => ({ ...s, size }))
     install(makeWorld(size, world.current.scene))
   }
@@ -763,21 +788,37 @@ export function App() {
     } catch (error) { say(describe(error)) }
   }
 
-  function startRave() {
+  function startRave(mode: RaveMode) {
+    const def = RAVE_MODES.find(info => info.id === mode)!
     setDirectorOpen(false)
-    const w = makeWorld(live.current.settings.size, world.current.scene)
+    if (mode !== 'freestyle') setPlacing(null)
+    const w = makeWorld(live.current.settings.size, def.scene ?? world.current.scene)
+    challenge.current = prepareChallenge(mode, w)
+    runningMode.current = mode
+    setRaveMode(mode)
+    setPaused(false)
     install(w)
-    session.current.start()
-    setRave({ active: true, finished: false, charge: 0, drops: 0, score: 0, seconds: 90, scoring: false })
+    session.current.start(challenge.current?.objective)
+    setRave(session.current.status)
     setResult(null)
     setDropReady(false)
     setMenu('none')
-    say('90 seconds, three drops. Set up bombs, bricks and seeds, then drop on the beat. Bigger damage, bigger score.')
+    changeControllerPage(null)
+    if (mode !== 'freestyle') {
+      const startingTool = mode === 'skyline' ? M.Bomb : M.Water
+      setTool(startingTool)
+      setSecondTool(startingTool)
+      dock.current?.children[PADS.findIndex(p => p.tool === startingTool)]?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    }
+    if (challenge.current) setToast(t => ({ ...t, text: '' }))
+    else say('90 seconds, three drops. Set up bombs, bricks and seeds, then drop on the beat.')
   }
 
   function leaveRave() {
-    session.current.active = session.current.finished = false
-    setRave(r => ({ ...r, active: false, finished: false }))
+    session.current.leave()
+    challenge.current = null
+    runningMode.current = 'freestyle'
+    setRave(session.current.status)
     setResult(null)
   }
 
@@ -791,7 +832,9 @@ export function App() {
   async function load() {
     try {
       const data = await readLocal(SAVE_KEY)
+      if (session.current.active && challenge.current) { say('Finish the challenge before loading a world.'); return }
       if (!data) { say('Nothing saved yet.'); return }
+      if (session.current.finished) leaveRave()
       install(decodeWorld(data))
       say('Saved world loaded.')
     } catch (error) { say(describe(error)) }
@@ -812,7 +855,10 @@ export function App() {
     if (!file) return
     try {
       if (file.size > MAX_FILE_BYTES) throw new Error('That file is too large.')
-      install(decodeWorld(await file.text()))
+      const data = await file.text()
+      if (session.current.active && challenge.current) { say('Finish the challenge before importing a world.'); return }
+      if (session.current.finished) leaveRave()
+      install(decodeWorld(data))
       say(`Loaded ${file.name}`)
     } catch (error) { say(describe(error)) }
   }
@@ -825,14 +871,16 @@ export function App() {
   })
 
   function paintAt(cell: Cell, erase: boolean, { brush, tool }: Brush = live.current) {
+    if (runningMode.current === 'skyline' && session.current.scoring) return
     if (!erase && isBeatTool(tool)) return
     if (!erase && isClickTool(tool)) {
       if (tool === BLAST) world.current.blast(cell.x, cell.y, blastRadius(brush), .8 + brush / 25, true)
-      else if (!world.current.placeBomb(cell.x, cell.y)) say('No room for a bomb there.')
+      else if (!world.current.placeBomb(cell.x, cell.y, session.current.active && runningMode.current === 'skyline')) say('No room for a bomb there.')
     } else world.current.paint(cell.x, cell.y, brush, tool, erase)
   }
 
   function paintLine(from: Cell, to: Cell, erase: boolean, { brush, tool }: Brush = live.current) {
+    if (runningMode.current === 'skyline' && session.current.scoring) return
     if (!erase && isBeatTool(tool)) return
     const d = Math.max(Math.abs(to.x - from.x), Math.abs(to.y - from.y))
     const steps = Math.max(1, d / Math.max(1, brush * .5) | 0)
@@ -883,6 +931,8 @@ export function App() {
   }
 
   const activePad = PADS.find(p => p.tool === tool)
+  const modeName = RAVE_MODES.find(mode => mode.id === raveMode)?.name
+  const objectiveLabel = raveMode === 'skyline' ? 'Towers toppled' : 'Roots alive'
 
   function directorContext() {
     const w = world.current, bounds = imageBounds.current
@@ -954,7 +1004,8 @@ export function App() {
             </div>
             <div className="seg mode" role="group" aria-label="Mode">
               <button className={!rave.active && !rave.finished ? 'on' : ''} onClick={leaveRave}>Sandbox</button>
-              <button className={rave.active || rave.finished ? 'on' : ''} onClick={startRave}>Rave</button>
+              <button className={rave.active || rave.finished ? 'on' : ''} aria-haspopup="dialog"
+                onClick={() => openRavePicker()}>Rave</button>
             </div>
             {controllerConnected && (
               <button className="chip" aria-haspopup="dialog" onClick={() => changeControllerPage('main')}>Controller</button>
@@ -1095,12 +1146,22 @@ export function App() {
               onClick={retryDrop}>Retry the Drop</button>
           )}
           {(rave.active || rave.finished) && (
-            <section className="rave-card" aria-label="Rave challenge" aria-live="polite">
+            <section className={`rave-card${rave.objectiveTarget > 0 ? ' mission-card' : ''}`} aria-label="Rave challenge" aria-live="polite">
               <div className="rave-top">
-                <strong>{rave.finished ? rave.drops === 3 ? 'RAVE COMPLETE' : 'TIME UP' : 'RAVE'}</strong>
-                <span className="pips" aria-label={`${rave.drops} of 3 drops`}>{[0, 1, 2].map(n => <i key={n} className={n < rave.drops ? 'on' : ''} />)}</span>
+                <strong>{rave.finished ? rave.outcome === 'timeout' ? 'TIME UP' : rave.outcome === 'failed' ? 'TRY AGAIN'
+                  : rave.objectiveTarget ? 'CHALLENGE CLEARED' : 'RAVE COMPLETE' : secondConnected ? 'CO-OP RAVE' : 'RAVE'}</strong>
+                <span className="pips" aria-label={`${rave.drops} of ${rave.dropLimit} drops`}>{Array.from({ length: rave.dropLimit }, (_, n) =>
+                  <i key={n} className={n < rave.drops ? 'on' : ''} />)}</span>
                 {rave.active && <span className={`clock ${rave.seconds <= 10 ? 'low' : ''}`}>{rave.seconds}s</span>}
               </div>
+              {rave.objectiveTarget > 0 && (
+                <div className="rave-objective">
+                  <b>{modeName}</b>
+                  <div><span>{objectiveLabel}</span><strong>{rave.objectiveProgress} · Goal {rave.objectiveTarget}</strong></div>
+                  <progress aria-label={objectiveLabel} max={rave.objectiveTarget} value={Math.min(rave.objectiveProgress, rave.objectiveTarget)} />
+                  {rave.active && <small>{challenge.current?.hint(rave.drops, rave.scoring)}</small>}
+                </div>
+              )}
               <div className="score">{rave.score.toLocaleString()}<small>pts</small></div>
               {result && (
                 <div className={`grade ${result.grade.label === 'PERFECT' ? 'perfect' : result.grade.label === 'GREAT' ? 'great' : ''}`} key={result.drop}>
@@ -1109,7 +1170,8 @@ export function App() {
               )}
               {rave.finished && (
                 <div className="rave-actions">
-                  <button className="chip on" onClick={startRave}>Play again</button>
+                  <button className="chip on" onClick={() => startRave(raveMode)}>Play again</button>
+                  <button className="chip" onClick={() => openRavePicker()}>Challenges</button>
                   <button className="chip" onClick={leaveRave}>Sandbox</button>
                 </div>
               )}
@@ -1189,10 +1251,10 @@ export function App() {
       <input ref={worldPicker} type="file" accept="application/json,.json" hidden onChange={importWorld} />
 
       <ControllerMenu dialog={controllerDialog} page={controllerPage} scene={scene} raveActive={rave.active}
-        raveFinished={rave.finished} rumble={settings.dropRumble} onPage={changeControllerPage}
+        raveFinished={rave.finished} connected={controllerConnected} rumble={settings.dropRumble} onPage={changeControllerPage} onBack={backControllerPage}
         onRetry={canRetry && !rave.active && !rave.finished ? () => { retryDrop(); changeControllerPage(null) } : undefined}
         onWorld={id => { loadScene(id); changeControllerPage(null) }}
-        onRave={() => { startRave(); changeControllerPage(null) }}
+        onRavePicker={() => openRavePicker(true)} onRave={startRave} onReplay={() => startRave(raveMode)}
         onSandbox={() => { leaveRave(); changeControllerPage(null) }}
         onRumble={rumbleAvailable ? () => setSettings(s => ({ ...s, dropRumble: !s.dropRumble })) : undefined} />
 

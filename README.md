@@ -76,7 +76,12 @@ Images never leave your browser.
 
 Switch from **Sandbox** to **Rave** for a 90-second round with three drops. The music charges the DROP button; when it reads **DROP!**, press it (or **D**).
 
-Each drop scores for what it does to the world in the next three seconds: bricks demolished, walls smashed into gravel, bombs set off, flowers bloomed and material thrown. Scores are scaled so every detail level is worth the same. Press on the beat for a multiplier: **PERFECT ×2** within 70 ms of a beat, **GREAT ×1.5** within 140 ms. Nothing scores between drops, so use that time to set up: plant bombs, stack brick, sow seeds, place speakers.
+In Freestyle, each drop scores for what it does to the world in the next three seconds: bricks demolished, walls smashed into gravel, bombs set off, flowers bloomed and material thrown. Scores are scaled so every detail level is worth the same. Press on the beat for a multiplier: **PERFECT ×2** within 70 ms of a beat, **GREAT ×1.5** within 140 ms. Nothing scores between drops, so use that time to set up: plant bombs, stack brick, sow seeds, place speakers.
+
+Choose **Rave** to pick Freestyle or a challenge. On a controller, open the menu with **Y / Triangle**, then choose **Rave challenges**. A second controller can join at any time. Both players work on the same objective, score, and drop meter.
+
+- **Topple the Skyline** gives you one drop. Place several bombs inside each tower, starting low. The charges stay where you place them and wait for the drop. Topple at least **six of eight towers**. A tower counts when it loses at least 60% of its original bricks during the five seconds after the drop.
+- **Keep the Garden Alive** gives you three drops. The challenge card names the beds that will get hit next. Water those beds before the drop and keep at least **six of nine roots** alive after each wave.
 
 ## Worlds
 

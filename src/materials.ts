@@ -35,6 +35,8 @@ export const isBeatTool = (tool: Tool): tool is BeatTool => tool === BEAT_SAND |
 export const BOMB_FUSE = 8
 /** Fuse value meaning "only the drop (or fire) sets this off". */
 export const BOMB_DROP_ONLY = 250
+/** A drop-only charge that holds its position. */
+export const BOMB_FIXED = 251
 
 const table = (entries: [number, number][], fill = 0) => {
   const out = new Int8Array(256).fill(fill)

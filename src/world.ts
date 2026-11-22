@@ -1,7 +1,7 @@
 import { colorFor, FIRE_PALETTE, hsl, obsidian, pack, STEAM, type Rng } from './color.ts'
 import type { Energy } from './immersion.ts'
 import {
-  BOMB_DROP_ONLY, BOMB_FUSE, BREAKABLE, BRUSH_DENSITY, DENSITY, ERASE, FLUID, HOPPER, M, OVERWRITES, POWDER, type Tool,
+  BOMB_DROP_ONLY, BOMB_FIXED, BOMB_FUSE, BREAKABLE, BRUSH_DENSITY, DENSITY, ERASE, FLUID, HOPPER, M, OVERWRITES, POWDER, type Tool,
 } from './materials.ts'
 
 export const MAX_PARTICLES = 12000
@@ -381,7 +381,7 @@ export class World {
             break
           case M.Bomb:
             if (this.touches(i, x, y, M.Fire, M.Lava)) { this.detonate(i); break }
-            if (life[i] === 0) break // lit: holds still until it goes off
+            if (life[i] === 0 || life[i] === BOMB_FIXED) break
             this.fall(i, x, y, DENSITY[t])
             break
           case M.Speaker:
@@ -778,7 +778,7 @@ export class World {
     this.speakerKick(1.5)
     this.growPlants(true)
     const bombs = this.bombs().sort((a, b) => (a % this.width) - (b % this.width))
-    bombs.forEach((i, n) => this.schedule(i, 3 + n * 4))
+    bombs.forEach((i, n) => this.schedule(i, this.life[i] === BOMB_FIXED ? 3 + (n % 12) * 3 : 3 + n * 4))
     for (let k = 0; k < 3; k++) if (!this.strike()) break
     const r = this.rng
     for (let k = 0; k < 8; k++) this.bursts.push({ at: this.frame + k * 7 + 2, x: this.width * (.1 + r() * .8), y: this.height * (.12 + r() * .35) })
@@ -811,11 +811,12 @@ export class World {
   }
 
   /** Drops a single bomb at (x, y), if there is room. */
-  placeBomb(x: number, y: number) {
+  placeBomb(x: number, y: number, fixed = false) {
     if (x < 0 || x >= this.width || y < 0 || y >= this.height) return false
     const i = this.index(x, y)
-    if (this.type[i] !== M.Empty && !HOPPER[this.type[i]]) return false
+    if (this.type[i] !== M.Empty && !HOPPER[this.type[i]] && !(fixed && this.type[i] === M.Brick)) return false
     this.put(i, M.Bomb)
+    if (fixed) this.life[i] = BOMB_FIXED
     return true
   }
 }

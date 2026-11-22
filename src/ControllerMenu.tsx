@@ -1,8 +1,9 @@
 import { useLayoutEffect, type RefObject } from 'react'
 import { SCENES } from './scenes.ts'
+import { RAVE_MODES, type RaveMode } from './rave-challenges.ts'
 import type { SceneId } from './world.ts'
 
-export type ControllerPage = 'main' | 'worlds' | 'controls'
+export type ControllerPage = 'main' | 'worlds' | 'controls' | 'raves'
 
 type Props = {
   dialog: RefObject<HTMLDialogElement | null>
@@ -10,10 +11,14 @@ type Props = {
   scene: SceneId
   raveActive: boolean
   raveFinished: boolean
+  connected: boolean
   rumble: boolean
   onPage: (page: ControllerPage | null) => void
+  onBack: (page: ControllerPage) => void
   onWorld: (scene: SceneId) => void
-  onRave: () => void
+  onRavePicker: () => void
+  onRave: (mode: RaveMode) => void
+  onReplay: () => void
   onSandbox: () => void
   onRumble?: () => void
   onRetry?: () => void
@@ -26,7 +31,8 @@ export function moveControllerFocus(dialog: HTMLDialogElement, direction: number
   buttons[current < 0 ? 0 : (current + direction + buttons.length) % buttons.length].focus()
 }
 
-export function ControllerMenu({ dialog, page, scene, raveActive, raveFinished, rumble, onPage, onWorld, onRave, onSandbox, onRumble, onRetry }: Props) {
+export function ControllerMenu({ dialog, page, scene, raveActive, raveFinished, connected, rumble, onPage, onBack,
+  onWorld, onRavePicker, onRave, onReplay, onSandbox, onRumble, onRetry }: Props) {
   useLayoutEffect(() => {
     const element = dialog.current
     if (!element) return
@@ -36,8 +42,10 @@ export function ControllerMenu({ dialog, page, scene, raveActive, raveFinished, 
     initial?.focus()
   }, [dialog, page])
 
-  const back = () => onPage(page === 'main' ? null : 'main')
+  const back = () => { if (page) onBack(page) }
   const currentWorld = SCENES.find(world => world.id === scene)?.name
+  const title = page === 'worlds' ? 'Choose a world' : page === 'raves' ? 'Rave challenges'
+    : page === 'controls' ? 'Controller controls' : 'Controller menu'
   return (
     <dialog ref={dialog} className="controller-dialog" aria-labelledby="controller-menu-title"
       onCancel={event => { event.preventDefault(); back() }}
@@ -46,14 +54,15 @@ export function ControllerMenu({ dialog, page, scene, raveActive, raveFinished, 
         event.preventDefault()
         moveControllerFocus(event.currentTarget, event.key === 'ArrowDown' ? 1 : -1)
       }}>
-      <h2 id="controller-menu-title">{page === 'worlds' ? 'Choose a world' : page === 'controls' ? 'Controller controls' : 'Controller menu'}</h2>
+      <h2 id="controller-menu-title">{title}</h2>
       <div className="controller-menu-body">
         {page === 'main' && (
           <div className="controller-options">
             <button data-initial-focus={!raveActive || undefined} disabled={raveActive} onClick={() => onPage('worlds')}>
               <strong>Worlds</strong><small>{raveActive ? 'Available after the round or in Sandbox' : currentWorld}</small>
             </button>
-            {!raveActive && <button onClick={onRave}><strong>{raveFinished ? 'Play Rave again' : 'Start Rave Mode'}</strong></button>}
+            {!raveActive && <button onClick={onRavePicker}><strong>Rave challenges</strong></button>}
+            {raveFinished && <button onClick={onReplay}><strong>Play Rave again</strong></button>}
             {(raveActive || raveFinished) && <button onClick={onSandbox}><strong>Return to Sandbox</strong></button>}
             {onRumble && (
               <button aria-pressed={rumble} onClick={onRumble}><strong>Drop rumble</strong><small>{rumble ? 'On' : 'Off'}</small></button>
@@ -69,6 +78,16 @@ export function ControllerMenu({ dialog, page, scene, raveActive, raveFinished, 
               <button key={world.id} data-initial-focus={world.id === scene || undefined}
                 aria-current={world.id === scene || undefined} onClick={() => onWorld(world.id)}>
                 <strong>{world.name}</strong><small>{world.detail}</small>
+              </button>
+            ))}
+            <button onClick={back}><strong>Back</strong></button>
+          </div>
+        )}
+        {page === 'raves' && (
+          <div className="controller-options">
+            {RAVE_MODES.map(rave => (
+              <button key={rave.id} data-initial-focus={rave.id === 'freestyle' || undefined} onClick={() => onRave(rave.id)}>
+                <strong>{rave.name}</strong><small>{rave.detail}</small>
               </button>
             ))}
             <button onClick={back}><strong>Back</strong></button>
@@ -91,7 +110,9 @@ export function ControllerMenu({ dialog, page, scene, raveActive, raveFinished, 
           </>
         )}
       </div>
-      <p className="controller-navigation">D-pad or left stick to move · A/Cross to select · B/Circle to go back</p>
+      <p className="controller-navigation">{connected
+        ? 'D-pad or left stick to move · A/Cross to select · B/Circle to go back'
+        : 'Arrow keys to move · Enter to select · Esc to go back'}</p>
     </dialog>
   )
 }

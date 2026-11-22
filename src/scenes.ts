@@ -117,17 +117,19 @@ const volcanoHooks: SceneHooks = {
 
 /** Window cells in the city: brick with life 1 (lit) or 2 (dark). */
 const LIT = 1, DARK = 2
+export const CITY_TOWERS: readonly (readonly [number, number, number])[] = [
+  [.03, .12, .42], [.14, .22, .3], [.24, .34, .5], [.36, .44, .22], [.56, .64, .35], [.66, .76, .18], [.78, .86, .45], [.88, .97, .32],
+]
+export const cityStreet = (height: number) => Math.floor(height * .9)
 
 function city(world: World) {
   const { width: W, height: H, rng } = world
-  const street = H * .9 | 0
+  const street = cityStreet(H)
   fillWhere(world, M.Wall, (_u, _v, _x, y) => y >= street)
   // a canal in the street
   const c0 = W * .46 | 0, c1 = W * .54 | 0
   for (let y = street; y < street + Math.max(4, H * .05 | 0) && y < H - 2; y++) for (let x = c0; x < c1; x++) world.set(x, y, M.Water)
-  const towers: [number, number, number][] = [
-    [.03, .12, .42], [.14, .22, .3], [.24, .34, .5], [.36, .44, .22], [.56, .64, .35], [.66, .76, .18], [.78, .86, .45], [.88, .97, .32],
-  ]
+  const towers = CITY_TOWERS
   for (const [l, r, top] of towers) {
     const x0 = W * l | 0, x1 = W * r | 0, y0 = H * top | 0
     const hue = 30 + rng() * 40
