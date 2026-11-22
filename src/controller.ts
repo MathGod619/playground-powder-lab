@@ -10,6 +10,7 @@ export const CONTROL = {
   shrink: 1 << 8,
   confirm: 1 << 9,
   back: 1 << 10,
+  retry: 1 << 11,
 } as const
 
 const DEAD_ZONE = .2
@@ -28,10 +29,13 @@ export class Controller {
   private previous = 0
   private suppressed = 0
   private unavailable = false
+  private resync = true
   private actuator: RumbleActuator | undefined
 
+  get deviceIndex() { return this.index }
+
   suspend() {
-    this.index = -1
+    this.resync = true
     this.actuator = undefined
   }
 
@@ -46,7 +50,7 @@ export class Controller {
     } catch { /* the controller disconnected or declined the effect */ }
   }
 
-  read(blocked: boolean, wakeActions = 0) {
+  read(blocked: boolean, wakeActions = 0, reservedIndex = -1) {
     if (this.unavailable || !navigator.getGamepads) return null
     let pads: ReturnType<Navigator['getGamepads']>
     try {
@@ -56,10 +60,10 @@ export class Controller {
       return null
     }
     const standard = (pad: Gamepad | null | undefined): pad is Gamepad =>
-      !!pad?.connected && pad.mapping === 'standard'
+      !!pad?.connected && pad.mapping === 'standard' && pad.index !== reservedIndex
     const current = pads[this.index]
     const pad = standard(current) ? current : pads.find(standard)
-    if (!pad) { this.suspend(); return null }
+    if (!pad) { this.index = -1; this.suspend(); return null }
     this.actuator = pad.vibrationActuator
 
     const down = (index: number) => pad.buttons[index]?.pressed
@@ -75,12 +79,14 @@ export class Controller {
     if (down(9)) buttons |= CONTROL.pause
     if (down(12)) buttons |= CONTROL.grow
     if (down(13)) buttons |= CONTROL.shrink
+    if (down(14)) buttons |= CONTROL.retry
 
     // Only the welcome screen accepts specific wake-up presses. Never replay blocked input.
-    if (this.index !== pad.index || blocked) {
+    if (this.index !== pad.index || this.resync || blocked) {
       this.suppressed = blocked ? buttons : buttons & ~wakeActions
       this.previous = 0
       this.index = pad.index
+      this.resync = false
     }
     this.suppressed &= buttons
     const held = buttons & ~this.suppressed

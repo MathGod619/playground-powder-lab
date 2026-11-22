@@ -48,6 +48,15 @@ Explosions smash walls, brick and speakers into gravel and throw everything else
 - Connect a standard controller over USB or Bluetooth and press **A / Cross** or **Start / Options** with the game tab focused to start. **Y / Triangle** opens the controller menu for worlds, Rave Mode, and the controls guide. Use the **D-pad** or **left stick** to move, **A / Cross** to select, and **B / Circle** to go back.
 - Use the **left stick** to aim, the **right stick** for fine aim, **A / Cross** or **RT / R2** to paint, **B / Circle** or **LT / L2** to erase, and the bumpers to cycle tools. **D-pad up/down** changes brush size, **X / Square** triggers a drop, and **Start / Options** freezes or resumes the world. On supported controllers, drops rumble. You can turn rumble off in the controller menu.
 - If your browser asks for an audio gesture after a controller start, press **Enter** to enable the demo track.
+- Connect a second controller and press a button to join local co-op. Both players share the world and music, with separate colored cursors, tools and brush sizes. Either player can trigger or retry a drop.
+
+## Try another drop
+
+Each manual drop in **Sandbox** saves the world immediately before the impact. Select **Retry the Drop**, press **U**, or press **D-pad left** to restore that setup while the same song keeps playing. Edit the restored setup or drop again to save a new checkpoint. Switching worlds or entering Rave Mode clears the checkpoint.
+
+## Beat brushes
+
+Open **Beat brushes** in the HUD, press **J**, **K** or **L**, or cycle to the beat brushes with the controller bumpers. Hold the paint button and move the brush to aim it. **Kick Sand** pours on kicks, **Hat Glitter** sprays on hi-hats, and **Bar Rocket** launches on the first kick of every group of four. Recorded tracks use the mapped kicks and hats once analysis finishes.
 
 ## Drop in your own images
 

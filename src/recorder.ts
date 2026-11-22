@@ -17,7 +17,7 @@ export const canRecord = () =>
 
 /**
  * Records the stage into a video. The page's glow is CSS (which a captured canvas can't see),
- * so each frame is recomposed here: background, pixels, blurred glow, overlay, DROP text.
+ * so each frame is recomposed here: background, pixels, blurred glow and overlay.
  */
 export class ClipRecorder {
   private canvas = document.createElement('canvas')
@@ -64,7 +64,7 @@ export class ClipRecorder {
   stop() { if (this.active) this.recorder!.stop() }
 
   /** Draws one frame. Call every animation frame while recording. */
-  frame(layers: Layers, world: World, view: View, glow: number, dropAge: number, shake: [number, number]) {
+  frame(layers: Layers, world: World, view: View, glow: number, shake: [number, number]) {
     if (!this.active) return
     if (performance.now() >= this.until) { this.stop(); return }
     const { ctx, canvas } = this, w = canvas.width, h = canvas.height, k = w / innerWidth
@@ -99,24 +99,6 @@ export class ClipRecorder {
     ctx.globalCompositeOperation = 'source-over'
     if (world.scene === 'sea') ctx.drawImage(layers.sky, 0, 0, w, h)
     ctx.drawImage(layers.overlay, 0, 0, w, h)
-
-    if (dropAge < .9) {
-      const p = dropAge / .9
-      const scale = p < .12 ? 1.8 - p / .12 * .85 : p < .22 ? .95 + (p - .12) / .1 * .08 : 1.03 + (p - .22) * .09
-      const alpha = p < .12 ? p / .12 : p < .7 ? 1 - (p - .12) * .17 : .9 * (1 - (p - .7) / .3)
-      ctx.save()
-      ctx.translate(w / 2, h / 2)
-      ctx.scale(scale, scale)
-      ctx.globalAlpha = Math.max(0, alpha)
-      ctx.font = `900 ${Math.min(w * .26, 280 * k)}px Unbounded, sans-serif`
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      const off = 6 * k
-      ctx.fillStyle = '#ff0a6c'; ctx.fillText('DROP', off, 0)
-      ctx.fillStyle = '#00e1ff'; ctx.fillText('DROP', -off, 0)
-      ctx.fillStyle = '#fff'; ctx.fillText('DROP', 0, 0)
-      ctx.restore()
-    }
 
     ctx.globalAlpha = .75
     ctx.font = `900 ${Math.round(16 * k)}px Unbounded, sans-serif`

@@ -2,17 +2,19 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ChangeEvent, CSSProperties, DragEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { MapPlayer } from './analysis.ts'
 import { AudioEngine, type SourceMode } from './audio.ts'
+import { paintBeatBrush, type BrushBeats } from './beat-brush.ts'
 import { BeatDetector } from './detector.ts'
 import { CONTROL, Controller } from './controller.ts'
 import { ControllerMenu, moveControllerFocus, type ControllerPage } from './ControllerMenu.tsx'
 import { Director } from './Director.tsx'
+import { cloneWorld } from './director-world.ts'
 import type { ScenePlan } from './director-plan.ts'
 import { automaticDrops, beatOffset, MusicEnvelope, RaveSession, type DropResult } from './immersion.ts'
 import { drawAtmosphere } from './atmosphere.ts'
 import { coverCrop, fitSize, IMAGE_MODES, removeBackground, stampImage, type ImageMode, type Pixels } from './image.ts'
-import { BLAST, isClickTool, isSolidTool, M, PADS, type Tool } from './materials.ts'
+import { BLAST, isBeatTool, isClickTool, isSolidTool, M, PADS, type Tool } from './materials.ts'
 import { ClipRecorder, canRecord, type Clip } from './recorder.ts'
-import { blastRadius, createRenderer, drawOverlay, type View } from './render.ts'
+import { blastRadius, createRenderer, drawOverlay, type BrushCursor, type Cursor, type View } from './render.ts'
 import { decodeWorld, encodeWorld, MAX_FILE_BYTES, SAVE_KEY } from './save.ts'
 import { buildScene, gridFor, SCENES, WORLD_SIZES, type WorldSize } from './scenes.ts'
 import { readLocal, writeLocal } from './storage.ts'
@@ -20,11 +22,15 @@ import { DEFAULT_REACTIONS, World, type Reactions, type SceneId } from './world.
 
 type Settings = { reactions: Reactions; glow: number; sensitivity: number; size: WorldSize; atmosphere: number; dropRumble: boolean }
 type Cell = { x: number; y: number }
+type Brush = { tool: Tool; brush: number }
+type Stroke = { last: Cell; erase: boolean }
+type Seat = { point: Cursor | null; stroke: (Stroke & Brush & { world: World }) | null; stick: number }
 const SETTINGS_KEY = 'powder-rave-settings-v1'
 const DEFAULT_SETTINGS: Settings = { reactions: DEFAULT_REACTIONS, glow: 1, sensitivity: 1, size: 'medium', atmosphere: 1, dropRumble: true }
 const MAX_BRUSH = 30
 const CLIP_SECONDS = 10
 const STEP_MS = 1000 / 60
+const BEAT_PADS = PADS.filter(pad => isBeatTool(pad.tool))
 
 const SLIDERS: { key: keyof Reactions | 'glow' | 'sensitivity'; label: string; hint: string; min: number; max: number }[] = [
   { key: 'kick', label: 'Kick jump', hint: 'How high piles jump on each kick', min: 0, max: 2 },
@@ -57,6 +63,8 @@ export function App() {
   const [splash, setSplash] = useState(true)
   const [tool, setTool] = useState<Tool>(M.Sand)
   const [brush, setBrush] = useState(6)
+  const [secondTool, setSecondTool] = useState<Tool>(M.Glitter)
+  const [secondBrush, setSecondBrush] = useState(6)
   const [paused, setPaused] = useState(false)
   const [scene, setScene] = useState<SceneId>('garden')
   const [source, setSource] = useState<SourceMode | null>(null)
@@ -65,7 +73,7 @@ export function App() {
   const [mixOpen, setMixOpen] = useState(false)
   const [toast, setToast] = useState({ text: '', id: 0 })
   const [dragging, setDragging] = useState(false)
-  const [drops, setDrops] = useState(0)
+  const [canRetry, setCanRetry] = useState(false)
   const [countdown, setCountdown] = useState<number | null>(null)
   const [recording, setRecording] = useState(0)
   const [armed, setArmed] = useState(false)
@@ -74,14 +82,16 @@ export function App() {
   const [dropReady, setDropReady] = useState(false)
   const [rave, setRave] = useState({ active: false, finished: false, charge: 0, drops: 0, score: 0, seconds: 90, scoring: false })
   const [result, setResult] = useState<DropResult | null>(null)
-  const [menu, setMenu] = useState<'none' | 'scenes' | 'rec'>('none')
+  const [menu, setMenu] = useState<'none' | 'scenes' | 'rec' | 'beats'>('none')
   const [fullscreen, setFullscreen] = useState(false)
   const [controllerConnected, setControllerConnected] = useState(false)
+  const [secondConnected, setSecondConnected] = useState(false)
   const [controllerPage, setControllerPage] = useState<ControllerPage | null>(null)
   const [rumbleAvailable, setRumbleAvailable] = useState(false)
   const [directorOpen, setDirectorOpen] = useState(false)
   const [canDirectorUndo, setCanDirectorUndo] = useState(false)
   const imageBounds = useRef<{ world: World; x: number; y: number; w: number; h: number } | null>(null)
+  const dropCheckpoint = useRef<{ world: World; image: typeof imageBounds.current } | null>(null)
   const directorUndo = useRef<{ world: World; settings: Settings; image: typeof imageBounds.current } | null>(null)
   /** An uploaded picture waiting to be placed. */
   const [placing, setPlacing] = useState<ImageBitmap | null>(null)
@@ -116,19 +126,21 @@ export function App() {
   const [audio] = useState(() => new AudioEngine())
   const [detector] = useState(() => new BeatDetector())
   const [recorder] = useState(() => new ClipRecorder())
-  const [controller] = useState(() => new Controller())
+  const [controllers] = useState(() => [new Controller(), new Controller()] as const)
   const mapPlayer = useRef<MapPlayer | null>(null)
   const mapToken = useRef(0)
-  const dropAt = useRef(-99)
+  const heardKicks = useRef(0)
+  const lastManualDrop = useRef(-Infinity)
+  const chromaTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const catching = useRef(false)
   const world = useRef<World>(null!)
   const draw = useRef<() => void>(() => {})
   const view = useRef<View>({ x: 0, y: 0, scale: 1 })
   const controllerBlocked = directorOpen || !!clip || dragging
-  const live = useRef({ tool, brush, paused, settings, splash, armed, placing: !!placing, controllerBlocked, controllerPage })
-  live.current = { tool, brush, paused, settings, splash, armed, placing: !!placing, controllerBlocked, controllerPage }
-  const stroke = useRef<{ id: number; erase: boolean; last: Cell } | null>(null)
-  const cursor = useRef<{ sx: number; sy: number; controller?: true } | null>(null)
+  const live = useRef({ tool, brush, secondTool, secondBrush, paused, settings, splash, armed, placing: !!placing, controllerBlocked, controllerPage })
+  live.current = { tool, brush, secondTool, secondBrush, paused, settings, splash, armed, placing: !!placing, controllerBlocked, controllerPage }
+  const stroke = useRef<(Stroke & { id: number }) | null>(null)
+  const cursor = useRef<(Cursor & { controller?: number }) | null>(null)
 
   const say = (text: string) => setToast(t => ({ text, id: t.id + 1 }))
 
@@ -157,7 +169,12 @@ export function App() {
     if (sky.current) { sky.current.width = innerWidth * dpr; sky.current.height = innerHeight * dpr }
   }
 
-  function install(next: World) {
+  function install(next: World, restoringDrop = false) {
+    if (!restoringDrop && dropCheckpoint.current) {
+      dropCheckpoint.current = null
+      setCanRetry(false)
+    }
+    stroke.current = null
     world.current = next
     draw.current = createRenderer(next, base.current!, glow.current!, bloom.current!)
     setScene(next.scene)
@@ -167,6 +184,7 @@ export function App() {
 
   function triggerDrop(manual = true) {
     if (live.current.paused || live.current.controllerPage) return
+    if (!manual && performance.now() - lastManualDrop.current < 450) return
     const challenge = session.current
     if (challenge.active) {
       if (!manual) return
@@ -176,20 +194,37 @@ export function App() {
       if (!r) return
       setResult({ ...r })
     }
+    if (manual && !challenge.active && !challenge.finished) {
+      const current = world.current, image = imageBounds.current
+      dropCheckpoint.current = { world: cloneWorld(current), image: image?.world === current ? image : null }
+      setCanRetry(true)
+    }
+    if (manual) lastManualDrop.current = performance.now()
     setDropReady(false)
     if (live.current.armed && !recorder.active && manual && canRecord()) {
       recorder.start(8, audio.recordStream()); setArmed(false)
     }
-    dropAt.current = performance.now() / 1000
     if (recorder.active && catching.current) { recorder.endIn(6); catching.current = false }
     world.current.drop(false)
-    if (live.current.settings.dropRumble && document.hasFocus()) void controller.rumbleDrop()
-    setDrops(n => n + 1)
+    if (live.current.settings.dropRumble && document.hasFocus()) for (const controller of controllers) void controller.rumbleDrop()
     const el = layer.current
     if (el) {
       el.classList.add('chroma')
-      setTimeout(() => el.classList.remove('chroma'), 450)
+      clearTimeout(chromaTimer.current)
+      chromaTimer.current = setTimeout(() => el.classList.remove('chroma'), 450)
     }
+  }
+
+  function retryDrop() {
+    const checkpoint = dropCheckpoint.current
+    if (!checkpoint || session.current.active || session.current.finished) return false
+    const restored = cloneWorld(checkpoint.world)
+    install(restored, true)
+    imageBounds.current = checkpoint.image ? { ...checkpoint.image, world: restored } : null
+    clearTimeout(chromaTimer.current)
+    layer.current?.classList.remove('chroma')
+    say('Pre-drop setup restored.')
+    return true
   }
 
   // Simulation + render loop
@@ -199,53 +234,66 @@ export function App() {
     const root = document.documentElement
     const fx = overlay.current!.getContext('2d')!
     const sctx = spec.current!.getContext('2d')!
-    let connected = false, hadRumble = false, menuStick = 0, shownSoundLock = false
-    let controllerStroke: { world: World; last: Cell; erase: boolean } | null = null
+    let connected = false, secondJoined = false, hadRumble = false, shownSoundLock = false
+    const seats: Seat[] = controllers.map(() => ({ point: null, stroke: null, stick: 0 }))
     const suspendController = () => {
-      controller.suspend()
-      controllerStroke = null
-      if (cursor.current?.controller) cursor.current = null
+      controllers.forEach(controller => controller.suspend())
+      for (const seat of seats) { seat.stroke = null; seat.stick = 0 }
+      if (cursor.current?.controller !== undefined) cursor.current = null
     }
     addEventListener('blur', suspendController)
     let frame = 0, acc = 0, prev = performance.now(), shownBpm = 0, shownCount: number | null = null, shownRec = 0, lastStatus = 0
     recorder.onDone = c => { setClip(c); setRecording(0); catching.current = false }
 
-    function updateController(dt: number) {
-      const previousStroke = controllerStroke
-      controllerStroke = null
-      const { controllerBlocked, placing, tool, splash, controllerPage } = live.current
-      const blocked = controllerBlocked || !!stroke.current || !document.hasFocus()
-      const input = controller.read(blocked, splash ? CONTROL.confirm | CONTROL.pause : 0)
-      if (connected !== !!input) {
-        connected = !!input
+    function updateControllers(dt: number) {
+      const previousStrokes = seats.map(seat => seat.stroke)
+      for (const seat of seats) seat.stroke = null
+      const { controllerBlocked, placing, splash, controllerPage } = live.current
+      const blocked = controllerBlocked || !document.hasFocus()
+      const wake = splash ? CONTROL.confirm | CONTROL.pause : 0
+      const first = controllers[0].read(blocked, wake, controllers[1].deviceIndex)
+      const second = controllers[1].read(blocked, wake, controllers[0].deviceIndex)
+      const inputs = [first, second]
+      if (connected !== !!(first || second)) {
+        connected = !!(first || second)
         setControllerConnected(connected)
         if (connected && !splash) say('Controller connected. Y / Triangle opens the menu.')
       }
-      if (hadRumble !== controller.canRumble) {
-        hadRumble = controller.canRumble
-        setRumbleAvailable(hadRumble)
+      if (secondJoined !== !!second) {
+        secondJoined = !!second
+        setSecondConnected(secondJoined)
+        if (secondJoined && !splash) say('Player 2 joined. Each controller has its own brush.')
       }
-      if (!input || blocked) {
-        if (cursor.current?.controller) cursor.current = null
-        return
-      }
+      const canRumble = controllers.some(controller => controller.canRumble)
+      if (hadRumble !== canRumble) { hadRumble = canRumble; setRumbleAvailable(canRumble) }
 
-      const { held, pressed, aim, fineAim } = input
+      for (let i = 0; i < inputs.length; i++) {
+        if (inputs[i]) continue
+        seats[i].point = null
+        seats[i].stick = 0
+        if (cursor.current?.controller === i) cursor.current = null
+      }
+      if (blocked || !connected) return
+      const pressed = (first?.pressed ?? 0) | (second?.pressed ?? 0)
       if (splash) {
         if (pressed & (CONTROL.confirm | CONTROL.pause)) start(true)
         return
       }
       if (pressed && audio.demoNeedsActivation && navigator.userActivation?.isActive) void audio.enableDemoSound()
 
-      const direction = Math.abs(aim.y) > .55 ? Math.sign(aim.y) : 0
-      const stickStep = direction !== menuStick ? direction : 0
-      menuStick = direction
+      const stickSteps = inputs.map((input, i) => {
+        const y = input?.aim.y ?? 0
+        const direction = Math.abs(y) > .55 ? Math.sign(y) : 0
+        const step = direction !== seats[i].stick ? direction : 0
+        seats[i].stick = direction
+        return step
+      })
       if (controllerPage) {
         const dialog = controllerDialog.current
         if (pressed & CONTROL.menu) changeControllerPage(null)
         else if (pressed & CONTROL.back) changeControllerPage(controllerPage === 'main' ? null : 'main')
         else if (dialog) {
-          const step = Number(!!(pressed & CONTROL.shrink)) - Number(!!(pressed & CONTROL.grow)) || stickStep
+          const step = Number(!!(pressed & CONTROL.shrink)) - Number(!!(pressed & CONTROL.grow)) || stickSteps[0] || stickSteps[1]
           if (step) moveControllerFocus(dialog, step)
           else if (pressed & CONTROL.confirm) {
             const focused = document.activeElement
@@ -255,59 +303,84 @@ export function App() {
         return
       }
       if (!placing && (pressed & CONTROL.menu)) { changeControllerPage('main'); return }
+      if (!placing && (pressed & CONTROL.retry) && retryDrop()) return
 
-      const { x, y } = aim.x || aim.y ? aim : { x: fineAim.x * .28, y: fineAim.y * .28 }
-      const erase = !!(held & CONTROL.erase)
-      const paint = !!(held & CONTROL.paint)
-      const action = erase ? CONTROL.erase : CONTROL.paint
-      if (x || y || cursor.current?.controller || (!placing && (pressed & action))) {
-        const point = cursor.current ?? { sx: innerWidth / 2, sy: innerHeight / 2 }
-        const distance = Math.max(280, Math.min(innerWidth, innerHeight) * .75) * Math.min(dt, .05)
-        cursor.current = {
-          sx: Math.max(0, Math.min(innerWidth - 1, point.sx + x * distance)),
-          sy: Math.max(0, Math.min(innerHeight - 1, point.sy + y * distance)),
-          controller: true,
+      const distance = Math.max(280, Math.min(innerWidth, innerHeight) * .75) * Math.min(dt, .05)
+      inputs.forEach((input, i) => {
+        if (!input) return
+        const { aim, fineAim } = input
+        const { x, y } = aim.x || aim.y ? aim : { x: fineAim.x * .28, y: fineAim.y * .28 }
+        const seat = seats[i]
+        const acting = x || y || (input.pressed & (CONTROL.paint | CONTROL.erase))
+        if (acting || seat.point || secondJoined) {
+          const mouse = !secondJoined && cursor.current?.controller === undefined ? cursor.current : null
+          const point = mouse ?? seat.point ?? {
+            sx: innerWidth * (secondJoined ? (i + 1) / 3 : .5), sy: innerHeight / 2,
+          }
+          seat.point = {
+            sx: Math.max(0, Math.min(innerWidth - 1, point.sx + x * distance)),
+            sy: Math.max(0, Math.min(innerHeight - 1, point.sy + y * distance)),
+          }
+          if (acting) cursor.current = { ...seat.point, controller: i }
         }
-      }
-
-      const size = Number(!!(pressed & CONTROL.grow)) - Number(!!(pressed & CONTROL.shrink))
+      })
       if (placing) {
         if (pressed & CONTROL.erase) setPlacing(null)
-        else if (pressed & CONTROL.paint) placeLatest.current()
+        else if (pressed & CONTROL.paint) {
+          const player = inputs.findIndex(input => !!(input && (input.pressed & CONTROL.paint)))
+          const point = seats[player]?.point
+          if (point) cursor.current = { ...point, controller: player }
+          placeLatest.current()
+        }
         else if (pressed & CONTROL.menu) setFillScreen(full => !full)
-        else if (size) resizeImage(size * 8)
+        else {
+          const size = Number(!!(pressed & CONTROL.grow)) - Number(!!(pressed & CONTROL.shrink))
+          if (size) resizeImage(size * 8)
+        }
         return
       }
 
-      const cycle = Number(!!(pressed & CONTROL.nextTool)) - Number(!!(pressed & CONTROL.previousTool))
-      if (cycle) {
-        const index = PADS.findIndex(p => p.tool === tool)
-        const next = (index + cycle + PADS.length) % PADS.length
-        setTool(PADS[next].tool)
-        dock.current?.children[next]?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-      }
-      if (size) setBrush(b => Math.max(1, Math.min(MAX_BRUSH, b + size)))
       if (pressed & CONTROL.pause) setPaused(p => !p)
       if ((pressed & CONTROL.drop) && !session.current.finished) triggerDrop()
 
-      const point = cursor.current
-      if ((!erase && !paint) || !point) return
-      const cell = toCell(point.sx, point.sy)
-      if (pressed & action) {
-        setMixOpen(false)
-        setMenu('none')
-        paintAt(cell, erase)
-      } else if (previousStroke?.world === world.current && previousStroke.erase === erase) {
-        const { last } = previousStroke
-        if ((cell.x !== last.x || cell.y !== last.y) && (erase || !isClickTool(tool))) paintLine(last, cell, erase)
-      } else return
+      inputs.forEach((input, i) => {
+        if (!input) return
+        const { held, pressed } = input
+        const { tool, brush } = i === 0 ? live.current : { tool: live.current.secondTool, brush: live.current.secondBrush }
+        const cycle = Number(!!(pressed & CONTROL.nextTool)) - Number(!!(pressed & CONTROL.previousTool))
+        if (cycle) {
+          const index = PADS.findIndex(p => p.tool === tool)
+          const next = (index + cycle + PADS.length) % PADS.length
+          const selectTool = i === 0 ? setTool : setSecondTool
+          selectTool(PADS[next].tool)
+          if (i === 0) dock.current?.children[next]?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+        }
+        const size = Number(!!(pressed & CONTROL.grow)) - Number(!!(pressed & CONTROL.shrink))
+        if (size) {
+          const selectBrush = i === 0 ? setBrush : setSecondBrush
+          selectBrush(b => Math.max(1, Math.min(MAX_BRUSH, b + size)))
+        }
 
-      if (erase || !isClickTool(tool)) controllerStroke = { world: world.current, last: cell, erase }
+        const seat = seats[i], point = seat.point, previous = previousStrokes[i]
+        const erase = !!(held & CONTROL.erase)
+        if ((!erase && !(held & CONTROL.paint)) || !point) return
+        const cell = toCell(point.sx, point.sy)
+        if (pressed & (erase ? CONTROL.erase : CONTROL.paint)) {
+          setMixOpen(false)
+          setMenu('none')
+          paintAt(cell, erase, { tool, brush })
+        } else if (previous?.world === world.current && previous.erase === erase) {
+          const { last } = previous
+          if ((cell.x !== last.x || cell.y !== last.y) && (erase || !isClickTool(tool))) paintLine(last, cell, erase, { tool, brush })
+        } else return
+
+        if (erase || !isClickTool(tool)) seat.stroke = { world: world.current, last: cell, erase, tool, brush }
+      })
     }
 
     const loop = (now: number) => {
       const w = world.current
-      const { tool, brush, settings, splash, armed, controllerPage } = live.current
+      const { tool, brush, secondTool, secondBrush, settings, splash, armed, controllerPage } = live.current
       const paused = live.current.paused || !!controllerPage
       const dt = Math.min(100, now - prev) / 1000
       acc += dt * 1000
@@ -321,13 +394,15 @@ export function App() {
       // A mapped song plays its beats from the map: exact timing, and we know when drops land.
       const songTime = audio.fileTime(), map = songTime === null ? null : mapPlayer.current
       const events = map ? map.update(songTime!) : heard
-      if (events.drop && automaticDrops(audio.mode, session.current.active || session.current.finished)) triggerDrop(false)
       if (audio.mode === 'tab' && (heard.breakdown || heard.drop)) setDropReady(true)
       if (events.kick) {
         w.onKick(events.kick, settings.reactions, paused)
         beat.current.last = map ? songTime! : now / 1000
       }
       if (events.hat) w.onHat(events.hat, settings.reactions, paused)
+      const kick = events.kick > 0
+      const downbeat = kick && (map ? (map.completedKicks - 1) % 4 === 0 : heardKicks.current++ % 4 === 0)
+      const beats: BrushBeats = { kick, hat: events.hat > 0, downbeat }
       const nowBpm = map ? map.map.bpm : detector.bpm
       beat.current.period = nowBpm ? 60 / nowBpm : 0
       if (nowBpm !== shownBpm) { shownBpm = nowBpm; setBpm(shownBpm) }
@@ -342,13 +417,22 @@ export function App() {
         else if (!map && audio.mode !== 'tab' && !session.current.active && heard.breakdown) { recorder.start(20, stream); catching.current = true; setArmed(false) }
       }
 
-      updateController(dt)
+      updateControllers(dt)
       if (w !== world.current) { frame = requestAnimationFrame(loop); return }
+      if (events.drop && automaticDrops(audio.mode, session.current.active || session.current.finished)) triggerDrop(false)
+      const strokes = seats.flatMap(seat => seat.stroke ? [seat.stroke] : [])
+      if (stroke.current) strokes.push({ ...stroke.current, tool, brush, world: w })
+      if (beats.kick || beats.hat) for (const s of strokes) {
+        if (!s.erase && isBeatTool(s.tool)) paintBeatBrush(w, s.last.x, s.last.y, s.brush, s.tool, beats)
+      }
       for (let n = 0; acc >= STEP_MS && n < 2; n++) {
         acc -= STEP_MS
         if (!paused) w.step()
-        const s = stroke.current ?? controllerStroke
-        if (s && (s.erase || (!isSolidTool(tool) && !isClickTool(tool)))) w.paint(s.last.x, s.last.y, brush, tool, s.erase)
+        for (const s of strokes) {
+          if (s.erase || (!isSolidTool(s.tool) && !isClickTool(s.tool) && !isBeatTool(s.tool))) {
+            w.paint(s.last.x, s.last.y, s.brush, s.tool, s.erase)
+          }
+        }
       }
       if (acc > STEP_MS) acc = 0
       w.decay()
@@ -371,11 +455,23 @@ export function App() {
       drawAtmosphere(sky.current!.getContext('2d')!, w, now / 1000, settings.atmosphere)
       draw.current()
       const placingNow = live.current.placing && ghost.current
-      drawOverlay(fx, w, view.current, overlay.current!.width / innerWidth, splash || controllerPage || recorder.active || placingNow ? null : cursor.current, brush, tool)
+      const cursors: BrushCursor[] = []
+      if (!splash && !controllerPage && !recorder.active && !placingNow) {
+        const point = cursor.current
+        if (secondJoined) {
+          const first = point && point.controller === undefined ? point : seats[0].point
+          const second = seats[1].point
+          if (first) cursors.push({ ...first, tool, brush, player: 1 })
+          if (second) cursors.push({ ...second, tool: secondTool, brush: secondBrush, player: 2 })
+        } else if (point) {
+          cursors.push({ ...(point.controller === 0 ? seats[0].point ?? point : point), tool, brush })
+        }
+      }
+      drawOverlay(fx, w, view.current, overlay.current!.width / innerWidth, cursors)
       if (placingNow) drawGhost(fx, ghost.current!.canvas)
       if (recorder.active) {
         recorder.frame({ sky: sky.current!, base: base.current!, glow: glow.current!, bloom: bloom.current!, overlay: overlay.current! }, w, view.current,
-          settings.glow, now / 1000 - dropAt.current, [sx, sy])
+          settings.glow, [sx, sy])
         const left = Math.ceil(recorder.remaining())
         if (left !== shownRec) { shownRec = left; setRecording(left) }
       } else if (shownRec) { shownRec = 0; setRecording(0) }
@@ -399,6 +495,7 @@ export function App() {
     if (import.meta.env.DEV) Object.assign(window, { __rave: { world: () => world.current, audio, recorder, step: (n: number) => { for (let k = 0; k < n; k++) world.current.step() }, draw: () => draw.current() } })
     return () => {
       cancelAnimationFrame(frame)
+      clearTimeout(chromaTimer.current)
       removeEventListener('resize', layout)
       removeEventListener('blur', suspendController)
       audio.stop()
@@ -551,6 +648,7 @@ export function App() {
       else if (key === ']' || key === '=') setBrush(b => Math.min(MAX_BRUSH, b + 1))
       else if (key === ' ') { e.preventDefault(); setPaused(p => !p) }
       else if (key === 'd') triggerDrop()
+      else if (key === 'u' && !e.repeat) retryDrop()
       else if (key === 'r') loadScene(world.current.scene)
       else if (key === 'f') toggleFullscreen()
       else if (key === 'escape') { setMixOpen(false); setMenu('none') }
@@ -564,6 +662,11 @@ export function App() {
   function changeControllerPage(page: ControllerPage | null) {
     setControllerPage(page)
     if (page === 'main') { setMenu('none'); setMixOpen(false) }
+  }
+
+  function resetBeats() {
+    detector.reset()
+    heardKicks.current = 0
   }
 
   function loadScene(id: SceneId) {
@@ -580,10 +683,10 @@ export function App() {
   async function pickSource(mode: SourceMode) {
     try {
       if (mode !== 'file') { mapPlayer.current = null; setMapped('none'); mapToken.current++ }
-      if (mode === 'demo') { audio.playDemo(); detector.reset() }
+      if (mode === 'demo') { audio.playDemo(); resetBeats() }
       else if (mode === 'file') { audioPicker.current?.click(); return }
-      else if (mode === 'mic') { await audio.listenMic(); detector.reset(); say('Listening to your mic. Play something loud.') }
-      else { await audio.listenTab(); detector.reset(); say('Hooked into tab audio. Play Spotify or YouTube in that tab.') }
+      else if (mode === 'mic') { await audio.listenMic(); resetBeats(); say('Listening to your mic. Play something loud.') }
+      else { await audio.listenTab(); resetBeats(); say('Hooked into tab audio. Play Spotify or YouTube in that tab.') }
       setSource(audio.mode)
       setDropReady(false)
       setArmed(false)
@@ -595,7 +698,7 @@ export function App() {
   async function playFile(file: File) {
     try {
       await audio.playFile(file)
-      detector.reset()
+      resetBeats()
       setSource('file')
       mapPlayer.current = null
       setMapped('analysing')
@@ -652,7 +755,7 @@ export function App() {
     setSplash(false)
     try {
       audio.playDemo()
-      detector.reset()
+      resetBeats()
       setSource('demo')
       say(withController
         ? 'Left stick aims. A / Cross paints. Y / Triangle opens the menu.'
@@ -721,16 +824,16 @@ export function App() {
     y: Math.floor((y - view.current.y) / view.current.scale),
   })
 
-  function paintAt(cell: Cell, erase: boolean) {
-    const { brush, tool } = live.current
+  function paintAt(cell: Cell, erase: boolean, { brush, tool }: Brush = live.current) {
+    if (!erase && isBeatTool(tool)) return
     if (!erase && isClickTool(tool)) {
       if (tool === BLAST) world.current.blast(cell.x, cell.y, blastRadius(brush), .8 + brush / 25, true)
       else if (!world.current.placeBomb(cell.x, cell.y)) say('No room for a bomb there.')
     } else world.current.paint(cell.x, cell.y, brush, tool, erase)
   }
 
-  function paintLine(from: Cell, to: Cell, erase: boolean) {
-    const { brush, tool } = live.current
+  function paintLine(from: Cell, to: Cell, erase: boolean, { brush, tool }: Brush = live.current) {
+    if (!erase && isBeatTool(tool)) return
     const d = Math.max(Math.abs(to.x - from.x), Math.abs(to.y - from.y))
     const steps = Math.max(1, d / Math.max(1, brush * .5) | 0)
     for (let k = 0; k <= steps; k++) {
@@ -813,7 +916,7 @@ export function App() {
       onDragLeave={e => { if (!e.relatedTarget) setDragging(false) }} onDrop={onDrop}>
       <div ref={stage} className="stage" onPointerDown={onPointerDown} onPointerMove={onPointerMove}
         onPointerUp={endStroke} onPointerCancel={endStroke}
-        onPointerLeave={e => { if (!stroke.current && !cursor.current?.controller && e.pointerType === 'mouse') cursor.current = null }}
+        onPointerLeave={e => { if (!stroke.current && cursor.current?.controller === undefined && e.pointerType === 'mouse') cursor.current = null }}
         onContextMenu={e => e.preventDefault()}
         onWheel={e => placing ? resizeImage(e.deltaY < 0 ? 4 : -4) : setBrush(b => Math.max(1, Math.min(MAX_BRUSH, b + (e.deltaY < 0 ? 1 : -1))))}>
         <canvas ref={sky} className={`atmosphere ${scene === 'sea' ? 'underwater' : ''}`} />
@@ -856,7 +959,27 @@ export function App() {
             {controllerConnected && (
               <button className="chip" aria-haspopup="dialog" onClick={() => changeControllerPage('main')}>Controller</button>
             )}
+            <div className="menu-wrap">
+              <button className={`chip ${isBeatTool(tool) || menu === 'beats' ? 'on' : ''}`} aria-expanded={menu === 'beats'}
+                onClick={() => setMenu(m => m === 'beats' ? 'none' : 'beats')}>Beat brushes</button>
+              {menu === 'beats' && (
+                <section className="menu beat-menu" aria-label="Beat brushes">
+                  {BEAT_PADS.map(pad => (
+                    <button key={pad.tool} className={tool === pad.tool ? 'on' : ''} aria-pressed={tool === pad.tool}
+                      onClick={() => { setTool(pad.tool); setMenu('none'); dock.current?.children[PADS.indexOf(pad)]?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }}>
+                      <b>{pad.name} · {pad.key}</b><small>{pad.hint}</small>
+                    </button>
+                  ))}
+                </section>
+              )}
+            </div>
           </div>
+          {secondConnected && !splash && (
+            <div className="coop" aria-label="Co-op brushes">
+              <span><b>P1</b> {activePad?.name} · {brush}</span>
+              <span><b>P2</b> {PADS.find(pad => pad.tool === secondTool)?.name} · {secondBrush}</span>
+            </div>
+          )}
         </div>
         <div className="deck">
           <div className="chips">
@@ -937,8 +1060,8 @@ export function App() {
 
       <nav ref={dock} className="hud dock">
         {PADS.map(p => (
-          <button key={p.tool} className={`pad ${tool === p.tool ? 'on' : ''}`} style={{ '--c': p.swatch } as CSSProperties}
-            title={`${p.name} (${p.key}): ${p.hint}`} onClick={() => setTool(p.tool)}>
+          <button key={p.tool} className={`pad ${isBeatTool(p.tool) ? 'beat-pad ' : ''}${tool === p.tool ? 'on' : ''}`} style={{ '--c': p.swatch } as CSSProperties}
+            title={`${p.name} (${p.key}): ${p.hint}`} aria-pressed={tool === p.tool} onClick={() => setTool(p.tool)}>
             <kbd>{p.key}</kbd><i className="sw" /><span>{p.name}</span>
           </button>
         ))}
@@ -967,6 +1090,10 @@ export function App() {
 
       {!splash && (
         <div className="drop-corner">
+          {canRetry && !rave.active && !rave.finished && (
+            <button className="chip retry-drop" title="Restore the setup before the last manual drop (U or D-pad left)"
+              onClick={retryDrop}>Retry the Drop</button>
+          )}
           {(rave.active || rave.finished) && (
             <section className="rave-card" aria-label="Rave challenge" aria-live="polite">
               <div className="rave-top">
@@ -1001,7 +1128,6 @@ export function App() {
       {directorOpen && !splash && <Director getWorld={() => world.current} context={directorContext} apply={applyDirector}
         undo={undoDirector} canUndo={canDirectorUndo && !rave.active && !rave.finished} close={() => setDirectorOpen(false)} />}
       {activePad && !splash && <div className="hint" key={activePad.name}>{activePad.hint}</div>}
-      {drops > 0 && <div className="drop-text" key={drops}>DROP</div>}
       {countdown !== null && <div className="countdown" key={countdown}>DROP IN <b>{countdown}</b></div>}
       {clip && (
         <div className="clip" role="dialog" aria-label="Your clip">
@@ -1064,6 +1190,7 @@ export function App() {
 
       <ControllerMenu dialog={controllerDialog} page={controllerPage} scene={scene} raveActive={rave.active}
         raveFinished={rave.finished} rumble={settings.dropRumble} onPage={changeControllerPage}
+        onRetry={canRetry && !rave.active && !rave.finished ? () => { retryDrop(); changeControllerPage(null) } : undefined}
         onWorld={id => { loadScene(id); changeControllerPage(null) }}
         onRave={() => { startRave(); changeControllerPage(null) }}
         onSandbox={() => { leaveRave(); changeControllerPage(null) }}

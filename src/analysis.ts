@@ -133,6 +133,8 @@ export class MapPlayer {
 
   constructor(map: BeatMap) { this.map = map }
 
+  get completedKicks() { return this.kick }
+
   private seek(t: number) {
     const first = <T>(list: T[], time: (x: T) => number) => {
       let lo = 0, hi = list.length

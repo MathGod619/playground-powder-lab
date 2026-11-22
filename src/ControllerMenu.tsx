@@ -16,6 +16,7 @@ type Props = {
   onRave: () => void
   onSandbox: () => void
   onRumble?: () => void
+  onRetry?: () => void
 }
 
 export function moveControllerFocus(dialog: HTMLDialogElement, direction: number) {
@@ -25,7 +26,7 @@ export function moveControllerFocus(dialog: HTMLDialogElement, direction: number
   buttons[current < 0 ? 0 : (current + direction + buttons.length) % buttons.length].focus()
 }
 
-export function ControllerMenu({ dialog, page, scene, raveActive, raveFinished, rumble, onPage, onWorld, onRave, onSandbox, onRumble }: Props) {
+export function ControllerMenu({ dialog, page, scene, raveActive, raveFinished, rumble, onPage, onWorld, onRave, onSandbox, onRumble, onRetry }: Props) {
   useLayoutEffect(() => {
     const element = dialog.current
     if (!element) return
@@ -57,6 +58,7 @@ export function ControllerMenu({ dialog, page, scene, raveActive, raveFinished, 
             {onRumble && (
               <button aria-pressed={rumble} onClick={onRumble}><strong>Drop rumble</strong><small>{rumble ? 'On' : 'Off'}</small></button>
             )}
+            {onRetry && <button onClick={onRetry}><strong>Retry the Drop</strong><small>Restore the setup. Music keeps playing.</small></button>}
             <button onClick={() => onPage('controls')}><strong>Controls</strong></button>
             <button data-initial-focus={raveActive || undefined} onClick={back}><strong>Resume</strong></button>
           </div>
@@ -80,6 +82,7 @@ export function ControllerMenu({ dialog, page, scene, raveActive, raveFinished, 
               <dt>B/Circle or LT/L2</dt><dd>Erase</dd>
               <dt>LB/RB or L1/R1</dt><dd>Switch tools</dd>
               <dt>D-pad up/down</dt><dd>Resize brush</dd>
+              <dt>D-pad left</dt><dd>Retry the last Sandbox drop</dd>
               <dt>X/Square</dt><dd>Drop</dd>
               <dt>Start/Options</dt><dd>Freeze or resume</dd>
               <dt>Y/Triangle</dt><dd>Open this menu</dd>

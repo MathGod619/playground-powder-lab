@@ -3,7 +3,8 @@ import { BLAST, BOMB_DROP_ONLY, ERASE, GLOWS, M, type Tool } from './materials.t
 import type { World } from './world.ts'
 
 export type View = { x: number; y: number; scale: number }
-export type Cursor = { sx: number; sy: number } | null
+export type Cursor = { sx: number; sy: number }
+export type BrushCursor = Cursor & { brush: number; tool: Tool; player?: number }
 
 /**
  * Draws the grid into a pixelated canvas plus a glow canvas that only holds emissive cells.
@@ -82,7 +83,7 @@ const bombLabels: number[] = []
 export const blastRadius = (brush: number) => Math.round(brush * 1.4 + 4)
 
 /** Screen-space overlay: shockwave rings, the brush cursor and the drop flash. */
-export function drawOverlay(ctx: CanvasRenderingContext2D, world: World, view: View, dpr: number, cursor: Cursor, brush: number, tool: Tool) {
+export function drawOverlay(ctx: CanvasRenderingContext2D, world: World, view: View, dpr: number, cursors: BrushCursor[]) {
   const s = view.scale * dpr, ox = view.x * dpr, oy = view.y * dpr
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
@@ -127,16 +128,28 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, world: World, view: V
       ctx.fillText(String(fuse), x, y)
     }
   }
-  if (cursor) {
-    const X = cursor.sx * dpr, Y = cursor.sy * dpr
+  for (const { sx, sy, brush, tool, player } of cursors) {
+    const X = sx * dpr, Y = sy * dpr
     const R = Math.max(3, (tool === BLAST ? blastRadius(brush) : tool === M.Bomb ? world.bombRadius : brush) * view.scale) * dpr
     ctx.lineWidth = 1.5 * dpr
-    ctx.strokeStyle = tool === ERASE ? 'rgba(255,255,255,.8)' : tool === BLAST ? 'rgba(255,120,60,.95)' : `hsla(${world.hue % 360},100%,75%,.9)`
+    const playerColor = player === 1 ? '#80f2ff' : player === 2 ? '#ff9bda' : null
+    ctx.strokeStyle = playerColor ?? (tool === ERASE ? 'rgba(255,255,255,.8)' : tool === BLAST ? 'rgba(255,120,60,.95)' : `hsla(${world.hue % 360},100%,75%,.9)`)
     ctx.setLineDash(tool === ERASE || tool === BLAST ? [4 * dpr, 4 * dpr] : [])
     ctx.beginPath(); ctx.arc(X, Y, R, 0, 7); ctx.stroke()
     ctx.setLineDash([])
     ctx.fillStyle = 'rgba(255,255,255,.9)'
     ctx.fillRect(X - dpr, Y - dpr, 2 * dpr, 2 * dpr)
+    if (playerColor) {
+      ctx.font = `700 ${13 * dpr}px "Space Mono", monospace`
+      ctx.textAlign = 'center'
+      ctx.lineWidth = 3 * dpr
+      ctx.strokeStyle = '#0e0a18'
+      ctx.fillStyle = playerColor
+      const text = 'P' + player, y = Y > R + 18 * dpr ? Y - R - 5 * dpr : Y + R + 17 * dpr
+      const x = Math.max(12 * dpr, Math.min(ctx.canvas.width - 12 * dpr, X))
+      ctx.strokeText(text, x, y)
+      ctx.fillText(text, x, y)
+    }
   }
   if (world.pulse.flash > .01) {
     ctx.fillStyle = `rgba(255,240,255,${world.pulse.flash * .55})`

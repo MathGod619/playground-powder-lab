@@ -26,7 +26,10 @@ export type Material = typeof M[keyof typeof M]
 export const ERASE = 200
 /** Click to set off an explosion at the cursor. */
 export const BLAST = 201
-export type Tool = Material | typeof ERASE | typeof BLAST
+export const BEAT_SAND = 202, BEAT_GLITTER = 203, BEAT_ROCKET = 204
+export type BeatTool = typeof BEAT_SAND | typeof BEAT_GLITTER | typeof BEAT_ROCKET
+export type Tool = Material | typeof ERASE | typeof BLAST | BeatTool
+export const isBeatTool = (tool: Tool): tool is BeatTool => tool === BEAT_SAND || tool === BEAT_GLITTER || tool === BEAT_ROCKET
 
 /** Beats a freshly placed bomb waits before going off. */
 export const BOMB_FUSE = 8
@@ -74,6 +77,9 @@ export const PADS: Pad[] = [
   { tool: M.Cloud, name: 'Cloud', key: 'V', swatch: 'radial-gradient(circle at 35% 40%,#fff,#b9c1d6 55%,#6c7590)', hint: 'Rains on hi-hats. Lightning on the drop.' },
   { tool: BLAST, name: 'Blast', key: 'X', swatch: 'radial-gradient(circle,#fff 0 12%,#ffd24a 16% 30%,#ff4a1f 34% 50%,#3a0f0f 54%)', hint: 'Click anywhere to blow it up. Brush size sets the radius.' },
   { tool: ERASE, name: 'Erase', key: 'E', swatch: 'repeating-linear-gradient(45deg,#2a2536 0 5px,#3a3449 5px 10px)', hint: 'Clears cells. Right-click also erases.' },
+  { tool: BEAT_SAND, name: 'Kick Sand', key: 'J', swatch: 'linear-gradient(135deg,#fff1ba,#ea8c37)', hint: 'Hold to pour sand on each kick.' },
+  { tool: BEAT_GLITTER, name: 'Hat Glitter', key: 'K', swatch: 'conic-gradient(#ff9cfa,#9051ff,#65f8ec,#ff9cfa)', hint: 'Hold to spray glitter on hi-hats.' },
+  { tool: BEAT_ROCKET, name: 'Bar Rocket', key: 'L', swatch: 'radial-gradient(circle at 50% 35%,#fff 0 19%,#f586dc 22% 42%,#7843e2 46% 64%,#271545 68%)', hint: 'Hold to launch a rocket on the first kick of each group of four.' },
 ]
 
 /** Fraction of brush cells filled per dab, so powders pour instead of stamping. */

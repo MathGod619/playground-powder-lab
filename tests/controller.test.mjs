@@ -73,3 +73,22 @@ test('drop rumble uses a supported actuator and handles disconnection', async t 
   await controller.rumbleDrop()
   assert.deepEqual(calls, [['dual-rumble', 240]])
 })
+
+test('two seats keep independent button edges and retain the remaining device', t => {
+  const first = gamepad(t)
+  const second = { ...first, index: 1, buttons: [] }
+  Object.defineProperty(navigator, 'getGamepads', { configurable: true, value: () => [first, second] })
+  const p1 = new Controller(), p2 = new Controller()
+  const read = () => [p1.read(false, 0, p2.deviceIndex), p2.read(false, 0, p1.deviceIndex)]
+  read()
+  first.buttons[0] = { pressed: true }
+  second.buttons[14] = { pressed: true }
+  const [paint, retry] = read()
+  assert.equal(paint.pressed, CONTROL.confirm | CONTROL.paint)
+  assert.equal(retry.pressed, CONTROL.retry)
+  first.connected = false
+  const [disconnected, stillJoined] = read()
+  assert.equal(disconnected, null)
+  assert.equal(stillJoined.pressed, 0)
+  assert.equal(p2.deviceIndex, 1)
+})
