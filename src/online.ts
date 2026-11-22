@@ -79,7 +79,7 @@ export class Online {
         this.role = null
       }
       ws.onopen = () => ws.send(JSON.stringify(first))
-      ws.onerror = () => fail('Could not reach the rave server.')
+      ws.onerror = () => fail('Could not reach the rave server. If your browser asked to allow local network access, allow it and try again.')
       ws.onclose = () => fail(this.role === 'guest' ? 'Lost the connection to the rave.' : 'The rave server connection closed.')
       ws.onmessage = event => {
         if (this.ws !== ws) return

@@ -106,6 +106,7 @@ Open **Online** in the HUD. **Host a rave** opens a room with a 4-letter code; *
 - Guests paint, plant bombs, use beat brushes and hit **DROP**; their strokes are applied on the host, so everyone sees the same world. Everyone sees everyone's named cursor.
 - The host picks the world, the mode and the music. The demo plays in sync for everyone. For an uploaded song, guests drop in the same file and it locks to the host's position; mic and tab audio are heard only on the host's device.
 - If the host leaves, the rave ends and guests keep the world.
+- On a device signed in to the server's Tailscale network, the relay address resolves to a private 100.x address, so Chrome asks to allow local network access the first time. Allow it. Everyone else connects over the public address and sees no prompt.
 
 The relay is `server/rave-relay.mjs` (see `server/README.md`). It forwards messages between the players in a room and stores nothing.
 
