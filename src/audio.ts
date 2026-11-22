@@ -1,6 +1,6 @@
 import { analyzeSamples, mono, type BeatMap } from './analysis.ts'
 import { bandLevels, type Bands } from './detector.ts'
-import { startDemo } from './demoTrack.ts'
+import { DEMO_LOOP_SECONDS, startDemo } from './demoTrack.ts'
 
 export type SourceMode = 'demo' | 'file' | 'mic' | 'tab'
 
@@ -52,11 +52,29 @@ export class AudioEngine {
     this.mode = null
   }
 
-  playDemo() {
+  private demoStartedAt = 0
+  /** Name and length of the playing file, so online guests can match it. */
+  fileName = ''
+
+  playDemo(offset = 0) {
     const { ctx, master } = this.ensure()
     this.stop()
-    this.stopCurrent = startDemo(ctx, master, this.noise!)
+    this.stopCurrent = startDemo(ctx, master, this.noise!, offset)
+    this.demoStartedAt = ctx.currentTime + .08 - offset
     this.mode = 'demo'
+  }
+
+  /** Seconds into the demo loop, or null when the demo is not playing. */
+  demoTime() {
+    if (this.mode !== 'demo' || !this.ctx) return null
+    return ((this.ctx.currentTime - this.demoStartedAt) % DEMO_LOOP_SECONDS + DEMO_LOOP_SECONDS) % DEMO_LOOP_SECONDS
+  }
+
+  get fileDuration() { return this.mode === 'file' && this.element ? this.element.duration || 0 : 0 }
+
+  /** Jumps the playing file to `t` seconds (online sync). */
+  seekFile(t: number) {
+    if (this.mode === 'file' && this.element && Number.isFinite(t)) this.element.currentTime = Math.max(0, t)
   }
 
   get demoNeedsActivation() { return this.mode === 'demo' && this.ctx?.state === 'suspended' }
@@ -84,6 +102,7 @@ export class AudioEngine {
     this.element = el
     this.stopCurrent = () => { el.pause(); node.disconnect(); URL.revokeObjectURL(url); this.element = null }
     this.mode = 'file'
+    this.fileName = file.name
   }
 
   /** Decodes a file and maps its kicks, hats and drops ahead of time. */

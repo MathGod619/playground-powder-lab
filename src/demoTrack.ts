@@ -4,14 +4,18 @@
  */
 export const DEMO_BPM = 124
 const SIXTEENTH = 60 / DEMO_BPM / 4
+/** One pass of the 16-bar loop, in seconds. */
+export const DEMO_LOOP_SECONDS = SIXTEENTH * 256
 const ROOTS = [110, 87.31, 130.81, 98]
 const CHORDS = [[440, 523.25, 659.25], [349.23, 440, 523.25], [523.25, 659.25, 783.99], [392, 493.88, 587.33]]
 
-export function startDemo(ctx: AudioContext, output: AudioNode, noise: AudioBuffer) {
+/** Starts the loop `offset` seconds in (used to join someone else's demo in sync). */
+export function startDemo(ctx: AudioContext, output: AudioNode, noise: AudioBuffer, offset = 0) {
   const bus = ctx.createGain()
   bus.connect(output)
-  let step = 0
-  let next = ctx.currentTime + .08
+  const into = ((offset % DEMO_LOOP_SECONDS) + DEMO_LOOP_SECONDS) % DEMO_LOOP_SECONDS
+  let step = Math.ceil(into / SIXTEENTH)
+  let next = ctx.currentTime + .08 + (step * SIXTEENTH - into)
 
   const env = (g: GainNode, t: number, peak: number, attack: number, decay: number) => {
     g.gain.setValueAtTime(0, t)

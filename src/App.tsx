@@ -20,6 +20,9 @@ import { decodeWorld, encodeWorld, MAX_FILE_BYTES, SAVE_KEY } from './save.ts'
 import { buildScene, gridFor, SCENES, WORLD_SIZES, type WorldSize } from './scenes.ts'
 import { spawnCrowd } from './crowd.ts'
 import { getSongShape, playheadColumn, setSongShape, songMarkers, songShape } from './song-world.ts'
+import { DEMO_LOOP_SECONDS } from './demoTrack.ts'
+import { applySnapshot, encodeSnapshot, pack, snapshotSize, unpack, type RemoteCursor, type SyncBase } from './netsync.ts'
+import { cleanCode, Online, randomName, validCode, type GuestAction, type HostNote, type Player, type Role } from './online.ts'
 import { readLocal, writeLocal } from './storage.ts'
 import { COACH_STEPS, completeStep, currentStep, isNewPlayer, ONBOARDED_KEY, STARTER_TOOLS, stepForPaint, type CoachStep } from './onboarding.ts'
 import { DEFAULT_REACTIONS, World, type Reactions, type SceneId } from './world.ts'
@@ -30,6 +33,11 @@ type Brush = { tool: Tool; brush: number }
 type Stroke = { last: Cell; erase: boolean }
 type Seat = { point: Cursor | null; stroke: (Stroke & Brush & { world: World }) | null; stick: number }
 const SETTINGS_KEY = 'powder-rave-settings-v1'
+const NAME_KEY = 'powder-rave-name'
+const NET_COLORS = ['#80f2ff', '#ff9bda', '#ffe66b', '#7dffb3']
+const netColor = (id: number) => NET_COLORS[id % NET_COLORS.length]
+/** A ?join=CODE invite link in the address. */
+const INVITE = typeof location === 'undefined' ? '' : cleanCode(new URLSearchParams(location.search).get('join') ?? '')
 const DEFAULT_SETTINGS: Settings = { reactions: DEFAULT_REACTIONS, glow: 1, sensitivity: 1, size: 'medium', atmosphere: 1, dropRumble: true, crowd: true, night: false }
 const MAX_BRUSH = 30
 const CLIP_SECONDS = 10
@@ -66,7 +74,7 @@ export function App() {
   const [settings, setSettings] = useState(loadSettings)
   const [splash, setSplash] = useState(true)
   // First-run guide: a new player sees a few tools and three steps that lead to their first drop.
-  const [starter, setStarter] = useState(() => isNewPlayer(localStorage, SETTINGS_KEY))
+  const [starter, setStarter] = useState(() => isNewPlayer(localStorage, SETTINGS_KEY) && !validCode(INVITE))
   const [coachDone, setCoachDone] = useState<CoachStep[]>([])
   const [allTools, setAllTools] = useState(false)
   const [tool, setTool] = useState<Tool>(M.Sand)
@@ -89,6 +97,20 @@ export function App() {
   const [mapped, setMapped] = useState<'none' | 'analysing' | 'ready'>('none')
   /** Name of the mapped song whose world can be built (see song-world.ts). */
   const [songName, setSongName] = useState<string | null>(null)
+  // Online play (online.ts, netsync.ts): the host's game runs the world and streams it; guests draw it and send actions.
+  const online = useRef(new Online())
+  const [net, setNet] = useState<{ role: Role; code: string; players: Player[] } | null>(null)
+  const [onlineOpen, setOnlineOpen] = useState(false)
+  const [netName, setNetName] = useState(() => { try { return localStorage.getItem(NAME_KEY) || randomName() } catch { return randomName() } })
+  const [joinCode, setJoinCode] = useState(INVITE)
+  const [netBusy, setNetBusy] = useState(false)
+  const [netError, setNetError] = useState('')
+  const remoteStrokes = useRef(new Map<number, Stroke & Brush & { world: World; seen: number }>())
+  const remoteCursors = useRef(new Map<number, RemoteCursor & { seen: number }>())
+  const guestView = useRef<{ cursors: RemoteCursor[]; haveKey: boolean; queue: Promise<void> }>({ cursors: [], haveKey: false, queue: Promise.resolve() })
+  const hostSync = useRef<{ base: SyncBase | null; sending: boolean; lastSent: number; lastKey: number; needKey: boolean; lastMusic: number }>(
+    { base: null, sending: false, lastSent: 0, lastKey: 0, needKey: true, lastMusic: 0 })
+  const musicHint = useRef('')
   const [dropReady, setDropReady] = useState(false)
   const session = useRef(new RaveSession())
   const [rave, setRave] = useState(() => session.current.status)
@@ -159,6 +181,12 @@ export function App() {
   const cursor = useRef<(Cursor & { controller?: number }) | null>(null)
 
   const say = (text: string) => setToast(t => ({ text, id: t.id + 1 }))
+  /** Guests in an online rave cannot change the world itself; the host does. */
+  const hostOnly = () => {
+    if (online.current.role !== 'guest') return false
+    say('Only the host can do that in an online rave.')
+    return true
+  }
 
   const coach = (step: CoachStep | null) => {
     if (step && live.current.starter) setCoachDone(done => done.includes(step) ? done : completeStep(done, step))
@@ -223,8 +251,10 @@ export function App() {
       setCanRetry(false)
     }
     stroke.current = null
-    if (live.current.settings.crowd && !next.ravers.length) spawnCrowd(next)
+    if (live.current.settings.crowd && !next.ravers.length && online.current.role !== 'guest') spawnCrowd(next)
     world.current = next
+    hostSync.current.base = null
+    hostSync.current.needKey = true
     draw.current = createRenderer(next, base.current!, glow.current!, bloom.current!)
     setScene(next.scene)
     setGridSize({ width: next.width, height: next.height })
@@ -232,6 +262,7 @@ export function App() {
   }
 
   function triggerDrop(manual = true) {
+    if (online.current.role === 'guest') { if (manual) online.current.send({ a: 'drop' }); return }
     if (live.current.paused || live.current.controllerPage) return
     if (!manual && performance.now() - lastManualDrop.current < 450) return
     const challenge = session.current
@@ -268,6 +299,7 @@ export function App() {
   }
 
   function retryDrop() {
+    if (hostOnly()) return false
     const checkpoint = dropCheckpoint.current
     if (!checkpoint || session.current.active || session.current.finished) return false
     const restored = cloneWorld(checkpoint.world)
@@ -294,6 +326,7 @@ export function App() {
       if (cursor.current?.controller !== undefined) cursor.current = null
     }
     addEventListener('blur', suspendController)
+    let lastHold = 0, lastCursor = 0
     let frame = 0, acc = 0, prev = performance.now(), nightLevel = live.current.settings.night ? 1 : 0, shownBpm = 0, shownCount: number | null = null, shownRec = 0, lastStatus = 0
     recorder.onDone = c => { setClip(c); setRecording(0); catching.current = false }
 
@@ -431,28 +464,32 @@ export function App() {
       })
     }
 
-    const loop = (now: number) => {
+    // One frame of the game. The animation loop runs it; while hosting online, a timer also runs it if the
+    // tab is in the background (browsers pause animation frames there, which would freeze everyone's rave).
+    let lastFrame = performance.now()
+    const tick = (now: number) => {
       const w = world.current
       const { tool, brush, secondTool, secondBrush, settings, splash, armed, controllerPage } = live.current
       const paused = live.current.paused || !!controllerPage
+      const guest = online.current.role === 'guest'
       const dt = Math.min(100, now - prev) / 1000
       acc += dt * 1000
       prev = now
 
       const bands = audio.read()
       const energy = envelope.current.update(bands, dt)
-      w.setEnergy(energy, dt, settings.reactions, paused)
-      if (!paused && !splash) session.current.tick(dt, energy.level)
+      if (!guest) w.setEnergy(energy, dt, settings.reactions, paused)
+      if (!paused && !splash && !guest) session.current.tick(dt, energy.level)
       const heard = detector.update(bands, now / 1000)
       // A mapped song plays its beats from the map: exact timing, and we know when drops land.
       const songTime = audio.fileTime(), map = songTime === null ? null : mapPlayer.current
       const events = map ? map.update(songTime!) : heard
       if (audio.mode === 'tab' && (heard.breakdown || heard.drop)) setDropReady(true)
-      if (events.kick) {
+      if (events.kick && !guest) {
         w.onKick(events.kick, settings.reactions, paused)
         beat.current.last = map ? songTime! : now / 1000
       }
-      if (events.hat) w.onHat(events.hat, settings.reactions, paused)
+      if (events.hat && !guest) w.onHat(events.hat, settings.reactions, paused)
       const kick = events.kick > 0
       const downbeat = kick && (map ? (map.completedKicks - 1) % 4 === 0 : heardKicks.current++ % 4 === 0)
       const beats: BrushBeats = { kick, hat: events.hat > 0, downbeat }
@@ -471,17 +508,22 @@ export function App() {
       }
 
       updateControllers(dt)
-      if (w !== world.current) { frame = requestAnimationFrame(loop); return }
-      if (events.drop && automaticDrops(audio.mode, session.current.active || session.current.finished)) triggerDrop(false)
+      if (w !== world.current) return
+      if (events.drop && !guest && automaticDrops(audio.mode, session.current.active || session.current.finished)) triggerDrop(false)
       const strokes = seats.flatMap(seat => seat.stroke ? [seat.stroke] : [])
       if (stroke.current) strokes.push({ ...stroke.current, tool, brush, world: w })
-      const editingLocked = runningMode.current === 'skyline' && session.current.scoring
+      if (online.current.role === 'host') for (const [id, s] of remoteStrokes.current) {
+        if (now - s.seen > 450 || s.world !== w) remoteStrokes.current.delete(id)
+        else strokes.push(s)
+      }
+      // Guests' strokes are painted by the host; here they only steer the cursor.
+      const editingLocked = (runningMode.current === 'skyline' && session.current.scoring) || guest
       if (!editingLocked && (beats.kick || beats.hat)) for (const s of strokes) {
         if (!s.erase && isBeatTool(s.tool)) paintBeatBrush(w, s.last.x, s.last.y, s.brush, s.tool, beats)
       }
       for (let n = 0; acc >= STEP_MS && n < 2; n++) {
         acc -= STEP_MS
-        if (!paused) w.step()
+        if (!paused && !guest) w.step()
         if (!editingLocked) for (const s of strokes) {
           if (s.erase || (!isSolidTool(s.tool) && !isClickTool(s.tool) && !isBeatTool(s.tool))) {
             w.paint(s.last.x, s.last.y, s.brush, s.tool, s.erase)
@@ -490,6 +532,16 @@ export function App() {
       }
       if (acc > STEP_MS) acc = 0
       w.decay()
+      if (online.current.connected) {
+        if (online.current.role === 'host' && online.current.players.length > 1) hostTick(now, w)
+        if (guest && now - lastHold > 100 && (stroke.current || seats.some(seat => seat.stroke))) { lastHold = now; online.current.send({ a: 'hold' }) }
+        const point = cursor.current ?? seats[0].point
+        if (guest && point && now - lastCursor > 66) {
+          lastCursor = now
+          const c = toCell(point.sx, point.sy)
+          online.current.send({ a: 'cursor', x: c.x, y: c.y, tool, brush })
+        }
+      }
       if (now - lastStatus > 250) {
         lastStatus = now
         const locked = !!audio.demoNeedsActivation
@@ -525,6 +577,12 @@ export function App() {
           cursors.push({ ...(point.controller === 0 ? seats[0].point ?? point : point), tool, brush })
         }
       }
+      if (online.current.role && !splash) {
+        const others = online.current.role === 'host' ? [...remoteCursors.current.values()]
+          : guestView.current.cursors.filter(c => c.id !== online.current.you)
+        const v = view.current
+        for (const c of others) cursors.push({ sx: v.x + (c.x + .5) * v.scale, sy: v.y + (c.y + .5) * v.scale, tool: c.tool, brush: c.brush, label: c.name, color: netColor(c.id) })
+      }
       const song = w.scene === 'song' ? getSongShape() : null, songAt = song && audio.mode === 'file' ? audio.fileTime() : null
       drawOverlay(fx, w, view.current, overlay.current!.width / innerWidth, cursors, challenge.current?.markers ?? (w.scene === 'song' ? songMarkers() : undefined),
         song && songAt !== null ? playheadColumn(w, song, songAt) : null)
@@ -547,14 +605,19 @@ export function App() {
         sctx.fillStyle = `hsl(${w.hue + k * 6},100%,${55 + v * 25}%)`
         sctx.fillRect(k * sw / bars + 1, sh - bh, sw / bars - 3, bh)
       }
-      frame = requestAnimationFrame(loop)
     }
+    const loop = (now: number) => { lastFrame = performance.now(); tick(now); frame = requestAnimationFrame(loop) }
     frame = requestAnimationFrame(loop)
+    const backstop = setInterval(() => {
+      const now = performance.now()
+      if (online.current.role === 'host' && now - lastFrame > 150) tick(now)
+    }, 40)
     audio.onEnded = () => { setSource(null); say('Audio stopped. Pick another source.') }
     // Development-only handle for automated play-testing.
     if (import.meta.env.DEV) Object.assign(window, { __rave: { world: () => world.current, session: () => session.current, audio, recorder, step: (n: number) => { for (let k = 0; k < n; k++) world.current.step() }, draw: () => draw.current() } })
     return () => {
       cancelAnimationFrame(frame)
+      clearInterval(backstop)
       clearTimeout(chromaTimer.current)
       removeEventListener('resize', layout)
       removeEventListener('blur', suspendController)
@@ -627,6 +690,7 @@ export function App() {
   }
 
   async function openImage(file: File) {
+    if (hostOnly()) return
     if (session.current.active && challenge.current) { say('Return to Sandbox to add an image.'); return }
     if (!file.type.startsWith('image/')) { say('That is not an image.'); return }
     try {
@@ -703,7 +767,7 @@ export function App() {
         else if (key === 'enter' && !(e.target instanceof HTMLElement && e.target.closest('button'))) placeLatest.current()
         return
       }
-      if (key === 'i') { imagePicker.current?.click(); return }
+      if (key === 'i') { if (!hostOnly()) imagePicker.current?.click(); return }
       const pad = PADS.find(p => p.key.toLowerCase() === key)
       if (pad) setTool(pad.tool)
       else if (key === '[' || key === '-') setBrush(b => Math.max(1, b - 1))
@@ -728,6 +792,7 @@ export function App() {
   }
 
   function openRavePicker(fromMenu = false) {
+    if (hostOnly()) return
     if (session.current.active) return
     ravePickerFromMenu.current = fromMenu
     changeControllerPage('raves')
@@ -744,13 +809,191 @@ export function App() {
     heardKicks.current = 0
   }
 
+  // ---------------------------------------------------------------- online play
+
+  /** Host: stream the world about 12 times a second, with a keyframe every few seconds or when someone joins. */
+  function hostTick(now: number, w: World) {
+    const sync = hostSync.current, net = online.current
+    if (now - sync.lastMusic > 2000) { sync.lastMusic = now; net.send(musicNote()) }
+    if (sync.sending || now - sync.lastSent < 83 || net.backlog > 600_000) return
+    sync.lastSent = now
+    const key = sync.needKey || !sync.base || now - sync.lastKey > 4000
+    const { bytes, base, keyframe } = encodeSnapshot(w, key ? null : sync.base, snapshotCursors())
+    sync.base = base
+    if (keyframe) { sync.lastKey = now; sync.needKey = false }
+    sync.sending = true
+    void pack(bytes).then(packed => net.sendSnapshot(packed)).catch(() => { sync.needKey = true }).finally(() => { sync.sending = false })
+  }
+
+  function snapshotCursors(): RemoteCursor[] {
+    const list: RemoteCursor[] = [], net = online.current, now = performance.now()
+    const point = cursor.current
+    if (point) {
+      const c = toCell(point.sx, point.sy)
+      list.push({ id: net.you, name: net.players.find(p => p.id === net.you)?.name ?? 'Host', x: c.x, y: c.y, tool: live.current.tool, brush: live.current.brush })
+    }
+    for (const [id, c] of remoteCursors.current) {
+      if (now - c.seen > 3000) remoteCursors.current.delete(id)
+      else list.push({ id: c.id, name: c.name, x: c.x, y: c.y, tool: c.tool, brush: c.brush })
+    }
+    return list
+  }
+
+  function musicNote(): HostNote {
+    const source = audio.mode
+    const time = source === 'demo' ? audio.demoTime() ?? 0 : source === 'file' ? audio.fileTime() ?? 0 : 0
+    return { t: 'music', source, time, name: source === 'file' ? audio.fileName : '', duration: audio.fileDuration }
+  }
+
+  /** Host: apply what a guest did, as if they were another player at this screen. */
+  function onGuestAction(id: number, m: GuestAction) {
+    const w = world.current, now = performance.now()
+    const cell = (c: { x: number; y: number }) => ({
+      x: Math.max(0, Math.min(w.width - 1, Math.round(Number(c.x) || 0))), y: Math.max(0, Math.min(w.height - 1, Math.round(Number(c.y) || 0))),
+    })
+    const validTool = (t: unknown): t is Tool => PADS.some(p => p.tool === t)
+    const sizeOf = (b: unknown) => Math.max(1, Math.min(MAX_BRUSH, Math.round(Number(b) || 1)))
+    if (m.a === 'cursor') {
+      if (!validTool(m.tool)) return
+      const name = online.current.players.find(p => p.id === id)?.name ?? 'Raver'
+      remoteCursors.current.set(id, { id, name, ...cell(m), tool: m.tool, brush: sizeOf(m.brush), seen: now })
+      return
+    }
+    if (m.a === 'drop') { triggerDrop(); return }
+    if (m.a === 'down') {
+      if (!validTool(m.tool)) return
+      const at = cell(m), brush = sizeOf(m.brush), erase = !!m.erase
+      paintAt(at, erase, { tool: m.tool, brush })
+      if (erase || !isClickTool(m.tool)) remoteStrokes.current.set(id, { last: at, erase, tool: m.tool, brush, world: w, seen: now })
+      return
+    }
+    const s = remoteStrokes.current.get(id)
+    if (!s) return
+    if (m.a === 'up') { remoteStrokes.current.delete(id); return }
+    s.seen = now
+    if (m.a === 'move') {
+      const at = cell(m)
+      if (s.erase || !isClickTool(s.tool)) paintLine(s.last, at, s.erase, s)
+      s.last = at
+    }
+  }
+
+  /** Guest: keep the music in step with the host's. */
+  function onHostNote(note: HostNote) {
+    if (note.t === 'toast') { say(note.text); return }
+    if (note.source === 'demo') {
+      const target = note.time + .12, t = audio.demoTime()
+      const d = t === null ? Infinity : (((t - target) % DEMO_LOOP_SECONDS) + DEMO_LOOP_SECONDS) % DEMO_LOOP_SECONDS
+      if (Math.min(d, DEMO_LOOP_SECONDS - d) > .25) { audio.playDemo(target); setSource('demo') }
+    } else if (note.source === 'file') {
+      if (audio.mode === 'file' && audio.fileName === note.name) {
+        const t = audio.fileTime()
+        if (t !== null && Math.abs(t - note.time) > .3) audio.seekFile(note.time + .1)
+      } else if (musicHint.current !== note.name) {
+        musicHint.current = note.name
+        say(`The host is playing “${note.name}”. Drop the same file in to hear it in sync.`)
+      }
+    } else if (note.source && musicHint.current !== note.source) {
+      musicHint.current = note.source
+      say('The host is playing live audio. You see every beat, but the sound stays on their device.')
+    }
+  }
+
+  /** Guest: decode and draw a snapshot, in arrival order. */
+  function onSnapshot(packed: Uint8Array) {
+    const g = guestView.current
+    g.queue = g.queue.then(async () => {
+      if (online.current.role !== 'guest') return
+      const bytes = await unpack(packed)
+      const head = snapshotSize(bytes)
+      let w = world.current
+      if (w.width !== head.width || w.height !== head.height) {
+        if (!head.keyframe) return
+        w = new World(head.width, head.height)
+        install(w)
+        g.haveKey = false
+      }
+      const info = applySnapshot(w, bytes, g.haveKey)
+      if (!info) return
+      if (head.keyframe) g.haveKey = true
+      g.cursors = info.cursors
+      setScene(info.scene)
+    }).catch(() => { /* a bad snapshot is skipped; the next keyframe recovers */ })
+  }
+
+  useEffect(() => {
+    const net = online.current
+    net.on('room', (code, _you, players, role) => {
+      setNet({ role, code, players })
+      setNetError('')
+      if (role === 'guest') {
+        guestView.current.haveKey = false
+        remoteStrokes.current.clear()
+        if (session.current.active || session.current.finished) leaveRave()
+        setDirectorOpen(false); setPlacing(null)
+        say(`Joined rave ${code}. Waiting for the host's world…`)
+      } else {
+        hostSync.current.needKey = true
+        say(`Your rave is open. Code ${code}.`)
+      }
+      setStarter(false)
+    })
+    net.on('players', players => {
+      setNet(n => n && { ...n, players })
+      hostSync.current.needKey = true
+      hostSync.current.lastMusic = 0
+    })
+    net.on('action', (id, m) => onGuestAction(id, m))
+    net.on('snapshot', onSnapshot)
+    net.on('note', onHostNote)
+    net.on('closed', reason => {
+      setNet(null)
+      remoteStrokes.current.clear(); remoteCursors.current.clear(); guestView.current.cursors = []
+      say(`${reason} You keep the world.`)
+    })
+    return () => net.leave()
+  }, [])
+
+  function saveName() { try { localStorage.setItem(NAME_KEY, netName) } catch { /* storage unavailable */ } }
+
+  async function hostRave() {
+    if (session.current.active) { say('Finish the Rave before going online.'); return }
+    saveName(); setNetBusy(true); setNetError('')
+    try { await online.current.host(netName) } catch (error) { setNetError(describe(error)) } finally { setNetBusy(false) }
+  }
+
+  async function joinRave(code = joinCode) {
+    if (!validCode(code)) { setNetError('Enter the 4-letter code.'); return }
+    saveName(); setNetBusy(true); setNetError('')
+    try { await online.current.join(code, netName) } catch (error) { setNetError(describe(error)) } finally { setNetBusy(false) }
+  }
+
+  function leaveOnline() {
+    const wasHost = online.current.role === 'host'
+    online.current.leave()
+    setNet(null)
+    remoteStrokes.current.clear(); remoteCursors.current.clear(); guestView.current.cursors = []
+    say(wasHost ? 'Rave ended.' : 'You left the rave. You keep the world.')
+  }
+
+  function copyInvite() {
+    if (!net) return
+    const params = new URLSearchParams({ join: net.code })
+    const relay = new URLSearchParams(location.search).get('relay')
+    if (relay) params.set('relay', relay)
+    const link = `${location.origin}${location.pathname}?${params}`
+    navigator.clipboard?.writeText(link).then(() => say('Invite link copied.'), () => say(link)) ?? say(link)
+  }
+
   function loadScene(id: SceneId) {
+    if (hostOnly()) return
     if (session.current.active) { say('Finish the Rave or return to Sandbox to change worlds.'); return }
     if (session.current.finished) leaveRave()
     install(makeWorld(live.current.settings.size, id))
   }
 
   function changeSize(size: WorldSize) {
+    if (hostOnly()) return
     if (session.current.active) { say('Finish the Rave before changing world detail.'); return }
     if (session.current.finished) leaveRave()
     setSettings(s => ({ ...s, size }))
@@ -836,12 +1079,14 @@ export function App() {
       audio.playDemo()
       resetBeats()
       setSource('demo')
-      if (withController) say('Left stick aims. A / Cross paints. Y / Triangle opens the menu.')
+      if (validCode(INVITE)) { setOnlineOpen(true); void joinRave(INVITE) }
+      else if (withController) say('Left stick aims. A / Cross paints. Y / Triangle opens the menu.')
       else if (!live.current.starter) say('Paint with the dock. Right-click erases. Wait for the drop.')
     } catch (error) { say(describe(error)) }
   }
 
   function startRave(mode: RaveMode) {
+    if (hostOnly()) return
     const def = RAVE_MODES.find(info => info.id === mode)!
     setDirectorOpen(false)
     if (mode !== 'freestyle') setPlacing(null)
@@ -883,6 +1128,7 @@ export function App() {
   }
 
   async function load() {
+    if (hostOnly()) return
     try {
       const data = await readLocal(SAVE_KEY)
       if (session.current.active && challenge.current) { say('Finish the challenge before loading a world.'); return }
@@ -905,6 +1151,7 @@ export function App() {
   async function importWorld(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     e.target.value = ''
+    if (hostOnly()) return
     if (!file) return
     try {
       if (file.size > MAX_FILE_BYTES) throw new Error('That file is too large.')
@@ -924,6 +1171,7 @@ export function App() {
   })
 
   function paintAt(cell: Cell, erase: boolean, { brush, tool }: Brush = live.current) {
+    if (online.current.role === 'guest') { online.current.send({ a: 'down', x: cell.x, y: cell.y, erase, tool, brush }); return }
     if (runningMode.current === 'skyline' && session.current.scoring) return
     if (!erase && isBeatTool(tool)) return
     if (!erase && isClickTool(tool)) {
@@ -934,6 +1182,7 @@ export function App() {
   }
 
   function paintLine(from: Cell, to: Cell, erase: boolean, { brush, tool }: Brush = live.current) {
+    if (online.current.role === 'guest') { online.current.send({ a: 'move', x: to.x, y: to.y }); return }
     if (runningMode.current === 'skyline' && session.current.scoring) return
     if (!erase && isBeatTool(tool)) return
     const d = Math.max(Math.abs(to.x - from.x), Math.abs(to.y - from.y))
@@ -969,6 +1218,7 @@ export function App() {
   }
 
   function endStroke(e: ReactPointerEvent<HTMLDivElement>) {
+    if (online.current.role === 'guest' && stroke.current?.id === e.pointerId) online.current.send({ a: 'up' })
     if (stroke.current?.id === e.pointerId) stroke.current = null
     if (e.pointerType !== 'mouse') cursor.current = null
   }
@@ -1037,6 +1287,7 @@ export function App() {
           <div className="logo">POWDER<b>RAVE</b></div>
           {!starter && <button className={`chip ${directorOpen ? 'on' : ''}`} aria-expanded={directorOpen} onClick={() => {
             if (session.current.active || session.current.finished) { say('Return to Sandbox to use the Director.'); return }
+            if (hostOnly()) return
             setDirectorOpen(o => !o); setMixOpen(false); setMenu('none')
           }}>Director</button>}
           <div className="chips">
@@ -1084,6 +1335,11 @@ export function App() {
               )}
             </div>}
           </div>
+          {(!starter || net) && (
+            <button className={`chip online-chip ${net ? 'on' : ''}`} aria-expanded={onlineOpen} onClick={() => { setOnlineOpen(o => !o); setMenu('none'); setMixOpen(false) }}>
+              {net ? <><i aria-hidden />{net.code} · {net.players.length}</> : 'Online'}
+            </button>
+          )}
           {secondConnected && !splash && (
             <div className="coop" aria-label="Co-op brushes">
               <span><b>P1</b> {activePad?.name} · {brush}</span>
@@ -1284,6 +1540,46 @@ export function App() {
             </button>
           )}
         </div>
+      )}
+      {onlineOpen && !splash && (
+        <section className="online-panel" aria-label="Online rave">
+          <div className="online-head">
+            <b>Online rave</b>
+            <button aria-label="Close" onClick={() => setOnlineOpen(false)}>×</button>
+          </div>
+          {!net ? (
+            <>
+              <label>Your name
+                <input value={netName} maxLength={20} onChange={e => setNetName(e.target.value)} />
+              </label>
+              <button className="chip on online-main" disabled={netBusy} onClick={() => void hostRave()}>Host a rave</button>
+              <div className="online-join">
+                <input aria-label="Room code" placeholder="CODE" value={joinCode} maxLength={4} autoCapitalize="characters"
+                  onChange={e => setJoinCode(cleanCode(e.target.value))} onKeyDown={e => { if (e.key === 'Enter') void joinRave() }} />
+                <button className="chip" disabled={netBusy || !validCode(joinCode)} onClick={() => void joinRave()}>Join</button>
+              </div>
+              <small>Up to four people share one world and one beat. The host's game runs the world; everyone paints, plants bombs and hits DROP.</small>
+              {netBusy && <small>Connecting…</small>}
+              {netError && <p className="online-error" role="alert">{netError}</p>}
+            </>
+          ) : (
+            <>
+              <div className="online-code" aria-label="Room code">{net.code}</div>
+              {net.role === 'host'
+                ? <button className="chip on" onClick={copyInvite}>Copy invite link</button>
+                : <small>You're in {net.players.find(p => p.host)?.name ?? 'the host'}'s rave. They pick the world and the music.</small>}
+              <ul className="online-players">
+                {net.players.map(p => (
+                  <li key={p.id} style={{ '--c': netColor(p.id) } as CSSProperties}>
+                    <i aria-hidden />{p.name}{p.host ? ' · host' : ''}{p.id === online.current.you ? ' (you)' : ''}
+                  </li>
+                ))}
+              </ul>
+              {net.role === 'host' && <small>{net.players.length < 2 ? 'Waiting for friends. Share the code or the link.' : 'Your game runs the world, so keep this tab open.'}</small>}
+              <button className="chip" onClick={leaveOnline}>{net.role === 'host' ? 'End rave' : 'Leave'}</button>
+            </>
+          )}
+        </section>
       )}
       {directorOpen && !splash && <Director getWorld={() => world.current} context={directorContext} apply={applyDirector}
         undo={undoDirector} canUndo={canDirectorUndo && !rave.active && !rave.finished} close={() => setDirectorOpen(false)} />}

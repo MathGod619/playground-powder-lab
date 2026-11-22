@@ -7,7 +7,7 @@ import type { World } from './world.ts'
 
 export type View = { x: number; y: number; scale: number }
 export type Cursor = { sx: number; sy: number }
-export type BrushCursor = Cursor & { brush: number; tool: Tool; player?: number }
+export type BrushCursor = Cursor & { brush: number; tool: Tool; player?: number; label?: string; color?: string }
 
 /**
  * Draws the grid into a pixelated canvas plus a glow canvas that only holds emissive cells.
@@ -173,11 +173,11 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, world: World, view: V
       ctx.fillText(label, ox + x * s, oy + y * s + 13 * dpr)
     }
   }
-  for (const { sx, sy, brush, tool, player } of cursors) {
+  for (const { sx, sy, brush, tool, player, label, color } of cursors) {
     const X = sx * dpr, Y = sy * dpr
     const R = Math.max(3, (tool === BLAST ? blastRadius(brush) : tool === M.Bomb ? world.bombRadius : brush) * view.scale) * dpr
     ctx.lineWidth = 1.5 * dpr
-    const playerColor = player === 1 ? '#80f2ff' : player === 2 ? '#ff9bda' : null
+    const playerColor = color ?? (player === 1 ? '#80f2ff' : player === 2 ? '#ff9bda' : null)
     ctx.strokeStyle = playerColor ?? (tool === ERASE ? 'rgba(255,255,255,.8)' : tool === BLAST ? 'rgba(255,120,60,.95)' : `hsla(${world.hue % 360},100%,75%,.9)`)
     ctx.setLineDash(tool === ERASE || tool === BLAST ? [4 * dpr, 4 * dpr] : [])
     ctx.beginPath(); ctx.arc(X, Y, R, 0, 7); ctx.stroke()
@@ -190,7 +190,7 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, world: World, view: V
       ctx.lineWidth = 3 * dpr
       ctx.strokeStyle = '#0e0a18'
       ctx.fillStyle = playerColor
-      const text = 'P' + player, y = Y > R + 18 * dpr ? Y - R - 5 * dpr : Y + R + 17 * dpr
+      const text = label ?? 'P' + player, y = Y > R + 18 * dpr ? Y - R - 5 * dpr : Y + R + 17 * dpr
       const x = Math.max(12 * dpr, Math.min(ctx.canvas.width - 12 * dpr, X))
       ctx.strokeText(text, x, y)
       ctx.fillText(text, x, y)

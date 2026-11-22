@@ -98,6 +98,17 @@ Choose **Rave** to pick Freestyle or a challenge. On a controller, open the menu
 - **Keep the Garden Alive** gives you three drops. The challenge card names the beds that will get hit next. Water those beds before the drop and keep at least **six of nine roots** alive after each wave.
 - **Boss Drop** gives you four drops to take down a monster stomping across the arena. A shield protects it except for a few seconds after each drop, so plant bombs right beside it: they wait for the drop. Each drop hits it a little, bombs next to it hit hard, and on-beat timing multiplies all of it. Every eighth beat it fights back, either eating the bombs within reach (its mouth glows the beat before) or spitting lava. Kill it before the drops run out.
 
+## Online rave
+
+Open **Online** in the HUD. **Host a rave** opens a room with a 4-letter code; **Copy invite link** gives a link that joins it directly. Up to four people share one world and one beat:
+
+- The host's game runs the world and streams it to everyone about 12 times a second (compressed keyframes plus changed cells, the airborne particles, the crowd and the boss). Keep the host's tab open; it keeps running in the background while music plays.
+- Guests paint, plant bombs, use beat brushes and hit **DROP**; their strokes are applied on the host, so everyone sees the same world. Everyone sees everyone's named cursor.
+- The host picks the world, the mode and the music. The demo plays in sync for everyone. For an uploaded song, guests drop in the same file and it locks to the host's position; mic and tab audio are heard only on the host's device.
+- If the host leaves, the rave ends and guests keep the world.
+
+The relay is `server/rave-relay.mjs` (see `server/README.md`). It forwards messages between the players in a room and stores nothing.
+
 ## Worlds
 
 | World | What's different |
@@ -134,6 +145,7 @@ Audio never leaves the browser.
 - `src/crowd.ts`: the dancing crowd: movement, beat reactions, blasts and sprites.
 - `src/boss.ts`: the Boss Drop monster: shield, damage, attacks and sprite.
 - `src/song-world.ts`: builds a world from a mapped song's shape.
+- `src/online.ts`, `src/netsync.ts`: online rooms and the world snapshot format; `server/rave-relay.mjs` is the relay.
 - `src/App.tsx`: the HUD and main loop.
 
 Inspired by DAN-BALL's [Powder Game](https://dan-ball.jp/en/javagame/dust2/).

@@ -105,3 +105,41 @@ Failures include the actual API rejection, validation reason or timeout, also pr
 Tests exercise the real HTTP bridge with a simulated Ollama upstream; they do not claim verification of your physical server or model quality. Run npm test and npm run build. On the real bridge, confirm Test connection, a generated preview, Apply, Undo, image preservation, template save and both audio modes.
 
 For an actual model check on Ubuntu without using the permanent bridge token: node server/check-model.mjs. This asks the configured Ollama model to customize the detailed aquarium starter, validates the result, and prints pass/fail plus non-secret shape, material and coordinate details. It checks valid model output, not artistic quality.
+
+
+# Online relay
+
+`rave-relay.mjs` connects online players. Rooms have 4-letter codes and up to four players. The host's browser runs the world and streams it to the room; guests' actions go to the host. The relay only forwards messages within a room: it stores nothing, runs no game code, needs no npm packages and no secrets.
+
+- Listens on `127.0.0.1:4191` (`RAVE_RELAY_PORT`). `GET /health` reports the number of open rooms.
+- Accepts WebSocket connections only from `https://mathgod619.github.io` and localhost dev servers (`RAVE_RELAY_ORIGINS` adds more).
+- Limits: 60 rooms, 4 players per room, 1 MiB per message, about 1.5 MiB/s per host stream, 120 messages/s per guest, idle connections dropped after 90 s.
+
+## Running it on the server
+
+The relay runs from its own folder, separate from the Director checkout:
+
+```sh
+mkdir -p ~/projects/powder-rave-relay/server
+# copy server/rave-relay.mjs and server/install-relay-service.mjs into that folder's server/
+cd ~/projects/powder-rave-relay
+printf '{"type":"module"}\n' > package.json
+node server/install-relay-service.mjs
+systemctl --user daemon-reload
+systemctl --user enable --now powder-rave-relay
+```
+
+It is published with Tailscale Funnel on port 10000 (443 and 8443 are already used by tailnet-only routes):
+
+```sh
+sudo tailscale funnel --bg --https=10000 http://127.0.0.1:4191
+```
+
+The game connects to `wss://serveroverlord.tail79679d.ts.net:10000` (`PUBLIC_RELAY` in `src/online.ts`). To take it offline:
+
+```sh
+sudo tailscale funnel --https=10000 off
+systemctl --user disable --now powder-rave-relay
+```
+
+To update the relay, copy the new `rave-relay.mjs` over and run `systemctl --user restart powder-rave-relay`.
