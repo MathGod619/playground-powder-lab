@@ -19,6 +19,7 @@ import { blastRadius, createRenderer, drawOverlay, type BrushCursor, type Cursor
 import { decodeWorld, encodeWorld, MAX_FILE_BYTES, SAVE_KEY } from './save.ts'
 import { buildScene, gridFor, SCENES, WORLD_SIZES, type WorldSize } from './scenes.ts'
 import { spawnCrowd } from './crowd.ts'
+import { getSongShape, playheadColumn, setSongShape, songMarkers, songShape } from './song-world.ts'
 import { readLocal, writeLocal } from './storage.ts'
 import { COACH_STEPS, completeStep, currentStep, isNewPlayer, ONBOARDED_KEY, STARTER_TOOLS, stepForPaint, type CoachStep } from './onboarding.ts'
 import { DEFAULT_REACTIONS, World, type Reactions, type SceneId } from './world.ts'
@@ -86,6 +87,8 @@ export function App() {
   const [armed, setArmed] = useState(false)
   const [clip, setClip] = useState<Clip | null>(null)
   const [mapped, setMapped] = useState<'none' | 'analysing' | 'ready'>('none')
+  /** Name of the mapped song whose world can be built (see song-world.ts). */
+  const [songName, setSongName] = useState<string | null>(null)
   const [dropReady, setDropReady] = useState(false)
   const session = useRef(new RaveSession())
   const [rave, setRave] = useState(() => session.current.status)
@@ -522,7 +525,9 @@ export function App() {
           cursors.push({ ...(point.controller === 0 ? seats[0].point ?? point : point), tool, brush })
         }
       }
-      drawOverlay(fx, w, view.current, overlay.current!.width / innerWidth, cursors, challenge.current?.markers)
+      const song = w.scene === 'song' ? getSongShape() : null, songAt = song && audio.mode === 'file' ? audio.fileTime() : null
+      drawOverlay(fx, w, view.current, overlay.current!.width / innerWidth, cursors, challenge.current?.markers ?? (w.scene === 'song' ? songMarkers() : undefined),
+        song && songAt !== null ? playheadColumn(w, song, songAt) : null)
       if (placingNow) drawGhost(fx, ghost.current!.canvas)
       if (recorder.active) {
         recorder.frame({ sky: sky.current!, base: base.current!, glow: glow.current!, bloom: bloom.current!, overlay: overlay.current! }, w, view.current,
@@ -785,8 +790,10 @@ export function App() {
       if (token !== mapToken.current || audio.mode !== 'file') return
       mapPlayer.current = new MapPlayer(map)
       setMapped('ready')
-      const drops = map.drops.length
-      say(`Mapped: ${map.bpm ? `${map.bpm} BPM, ` : ''}${drops} drop${drops === 1 ? '' : 's'} found`)
+      const drops = map.drops.length, shape = songShape(map, file.name)
+      setSongShape(shape)
+      setSongName(shape?.name ?? null)
+      say(`Mapped: ${map.bpm ? `${map.bpm} BPM, ` : ''}${drops} drop${drops === 1 ? '' : 's'} found${shape ? '. Press Build its world to play inside it.' : ''}`)
     } catch {
       if (token !== mapToken.current) return
       setMapped('none')
@@ -1036,10 +1043,15 @@ export function App() {
             <div className="menu-wrap">
               <button className={`chip scene-btn ${menu === 'scenes' ? 'on' : ''}`} aria-expanded={menu === 'scenes'}
                 onClick={() => setMenu(m => m === 'scenes' ? 'none' : 'scenes')}>
-                {SCENES.find(x => x.id === scene)?.name ?? 'World'} <span aria-hidden>▾</span>
+                {scene === 'song' ? `♪ ${getSongShape()?.name ?? 'Song world'}` : SCENES.find(x => x.id === scene)?.name ?? 'World'} <span aria-hidden>▾</span>
               </button>
               {menu === 'scenes' && (
                 <div className="menu" role="menu">
+                  {songName && (
+                    <button role="menuitem" className={`song-item ${scene === 'song' ? 'on' : ''}`} onClick={() => { setMenu('none'); loadScene('song') }}>
+                      <b>♪ {songName}</b><small>A world shaped by your song: loud parts are mountains, quiet parts are lakes, and every drop is a lava crater.</small>
+                    </button>
+                  )}
                   {SCENES.map(x => (
                     <button key={x.id} role="menuitem" className={scene === x.id ? 'on' : ''}
                       onClick={() => { setMenu('none'); loadScene(x.id) }}>
@@ -1116,6 +1128,9 @@ export function App() {
             </div>}
             {!starter && <button className={`chip mixbtn ${mixOpen ? 'on' : ''}`} onClick={() => { setMenu('none'); setMixOpen(o => !o) }} aria-expanded={mixOpen}>Mix</button>}
           </div>
+          {songName && mapped === 'ready' && source === 'file' && scene !== 'song' && !rave.active && (
+            <button className="chip on song-chip" title="Build a world shaped by this song" onClick={() => loadScene('song')}>Build its world</button>
+          )}
           {mixOpen && !starter && (
             <section className="mix" aria-label="Mix and world settings">
               <label className="slider" title="Aurora, light beams and drifting particles behind the world">

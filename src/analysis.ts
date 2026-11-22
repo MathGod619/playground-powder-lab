@@ -7,6 +7,24 @@ export type BeatMap = {
   kicks: { t: number; s: number }[]
   hats: { t: number; s: number }[]
   drops: number[]
+  /** The song's shape over time, in SHAPE_BINS slices each scaled 0–1: overall loudness, bass and treble. */
+  shape?: { loud: number[]; bass: number[]; treble: number[] }
+}
+
+export const SHAPE_BINS = 96
+
+/** Averages an envelope into `bins` slices and scales it so the loudest slice is 1. */
+export function profile(energy: Float32Array, bins = SHAPE_BINS) {
+  const out = new Array<number>(bins).fill(0)
+  if (!energy.length) return out
+  for (let b = 0; b < bins; b++) {
+    const a = Math.floor(b * energy.length / bins), z = Math.max(a + 1, Math.floor((b + 1) * energy.length / bins))
+    let sum = 0
+    for (let i = a; i < z && i < energy.length; i++) sum += energy[i]
+    out[b] = sum / (z - a)
+  }
+  const top = Math.max(...out) || 1
+  return out.map(v => v / top)
 }
 
 const HOP = 512
@@ -110,7 +128,8 @@ export function analyzeSamples(samples: Float32Array, rate: number): BeatMap {
     const breakdown = (gap >= 1.5 && heard >= 4) || (before < after * .45 && t > 4)
     if (breakdown && after > average && t - (drops.at(-1) ?? -Infinity) > 8) drops.push(t)
   }
-  return { duration: samples.length / rate, bpm, kicks, hats, drops }
+  const loud = frameEnergy(samples, frames)
+  return { duration: samples.length / rate, bpm, kicks, hats, drops, shape: { loud: profile(loud), bass: profile(low), treble: profile(high) } }
 }
 
 /** Mixes an AudioBuffer down to mono. */

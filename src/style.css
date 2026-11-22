@@ -326,3 +326,11 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 /* ---- night mode: the page behind the world goes dark too ---- */
 .stage.night { background: radial-gradient(130% 75% at 50% 115%, hsl(var(--hue) 90% calc(3% + var(--pulse) * 10%)), transparent 72%), #020106 }
 .stage.night .atmosphere { opacity: .35; transition: opacity .6s }
+
+/* ---- song worlds ---- */
+.song-chip { align-self: flex-end }
+.menu .song-item b { color: var(--accent) }
+@media (max-width: 640px), (max-height: 500px) {
+  .song-chip { order: 6 }
+  .meter .mapped { display: none }
+}

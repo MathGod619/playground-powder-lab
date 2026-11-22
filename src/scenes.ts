@@ -1,5 +1,6 @@
 import { colorFor, hsl, pack } from './color.ts'
 import { BOMB_DROP_ONLY, M } from './materials.ts'
+import { buildSongWorld } from './song-world.ts'
 import { DEFAULT_RULES, type SceneHooks, type SceneId, type SceneRules, type World } from './world.ts'
 
 export type SceneInfo = { id: SceneId; name: string; detail: string }
@@ -317,7 +318,7 @@ function blank(world: World) {
   for (const u of [.3, .7]) speaker(world, world.width * u | 0, floor - 2)
 }
 
-const BUILDERS: Record<SceneId, (w: World) => void> = { garden, volcano, city, moon, sea, storm, blank }
+const BUILDERS: Record<SceneId, (w: World) => void> = { garden, volcano, city, moon, sea, storm, blank, song: w => { buildSongWorld(w) } }
 const RULES: Partial<Record<SceneId, SceneRules>> = { moon: moonRules, sea: seaRules }
 const HOOKS: Partial<Record<SceneId, SceneHooks>> = { volcano: volcanoHooks, city: cityHooks, sea: seaHooks }
 

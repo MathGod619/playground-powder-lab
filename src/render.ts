@@ -107,7 +107,7 @@ const bombLabels: number[] = []
 export const blastRadius = (brush: number) => Math.round(brush * 1.4 + 4)
 
 /** Screen-space overlay: shockwave rings, the brush cursor and the drop flash. */
-export function drawOverlay(ctx: CanvasRenderingContext2D, world: World, view: View, dpr: number, cursors: BrushCursor[], markers: readonly ChallengeMarker[] = []) {
+export function drawOverlay(ctx: CanvasRenderingContext2D, world: World, view: View, dpr: number, cursors: BrushCursor[], markers: readonly ChallengeMarker[] = [], playhead: number | null = null) {
   const s = view.scale * dpr, ox = view.x * dpr, oy = view.y * dpr
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
@@ -151,6 +151,16 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, world: World, view: V
       ctx.fillStyle = fuse <= 3 ? '#ff5a6e' : 'rgba(255,255,255,.85)'
       ctx.fillText(String(fuse), x, y)
     }
+  }
+  if (playhead !== null) {
+    // Song worlds: a soft beam over the column the song has reached.
+    const X = ox + (playhead + .5) * s, top = oy, bottom = oy + world.height * s
+    const beam = ctx.createLinearGradient(0, top, 0, bottom)
+    beam.addColorStop(0, `hsla(${world.hue % 360},100%,75%,0)`)
+    beam.addColorStop(.25, `hsla(${world.hue % 360},100%,75%,${.22 + world.pulse.kick * .3})`)
+    beam.addColorStop(1, `hsla(${world.hue % 360},100%,75%,0)`)
+    ctx.fillStyle = beam
+    ctx.fillRect(X - 1.5 * dpr, top, 3 * dpr, bottom - top)
   }
   if (markers.length) {
     ctx.font = `700 ${13 * dpr}px "Space Mono", monospace`

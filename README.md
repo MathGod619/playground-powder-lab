@@ -82,6 +82,10 @@ Pick what the picture is made of:
 
 Images never leave your browser.
 
+## Song-shaped worlds
+
+When an uploaded song finishes mapping, press **Build its world** (or pick **♪ song name** at the top of the world menu). Powder Rave builds a landscape from the song: left to right is the song from start to end, loud sections rise into mountains and quiet breakdowns sink into lakes, every drop becomes a labelled lava crater at the moment it lands, speakers stand where the bass hits hardest, bright hi-hat sections get glitter strata (and busy hi-hats bring rain clouds), slow songs get seeds, and the song's character picks the colours. While it plays, a beam of light walks across the world, so you can watch the song arrive at each drop. **R** rebuilds it.
+
 ## Rave Mode
 
 Switch from **Sandbox** to **Rave** for a 90-second round with three drops. The music charges the DROP button; when it reads **DROP!**, press it (or **D**).
@@ -129,6 +133,7 @@ Audio never leaves the browser.
 - `src/onboarding.ts`: the first-run guide steps and starter tools.
 - `src/crowd.ts`: the dancing crowd: movement, beat reactions, blasts and sprites.
 - `src/boss.ts`: the Boss Drop monster: shield, damage, attacks and sprite.
+- `src/song-world.ts`: builds a world from a mapped song's shape.
 - `src/App.tsx`: the HUD and main loop.
 
 Inspired by DAN-BALL's [Powder Game](https://dan-ball.jp/en/javagame/dust2/).

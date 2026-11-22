@@ -9,7 +9,7 @@ import {
 export const MAX_PARTICLES = 12000
 /** Sand life value meaning "held in place" (see image.ts). */
 export const HELD_SAND = 1
-export type SceneId = 'garden' | 'volcano' | 'city' | 'moon' | 'sea' | 'storm' | 'blank'
+export type SceneId = 'garden' | 'volcano' | 'city' | 'moon' | 'sea' | 'storm' | 'blank' | 'song'
 export type Ring = { x: number; y: number; r: number; max: number; hue: number; width: number }
 export type Bolt = { points: [number, number][]; life: number }
 
