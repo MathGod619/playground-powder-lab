@@ -252,3 +252,50 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .placer-size { display: flex; align-items: center; gap: 2px; margin-left: auto; font: 700 12px 'Space Mono', monospace; font-variant-numeric: tabular-nums }
 .placer-size .tool { width: 30px; height: 30px }
 @media (max-width: 640px) { .placer { left: 12px; bottom: 96px } .placer-detail { display: none } }
+
+/* ---- phone layout ----
+   The two header columns flatten into one wrapping row:
+   row 1 is the logo and the beat meter (Clip, Mix), then world, mode, beat brushes, Director and the audio sources.
+   The dock spans the screen and scrolls, with a fade on the right edge to show there is more. */
+@media (max-width: 640px), (max-height: 500px) {
+  .top { flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 6px; padding: max(10px, env(safe-area-inset-top)) 12px 0 }
+  .brand, .deck, .brand > .chips { display: contents }
+  .top::before { content: ''; order: 1; flex-basis: 100%; height: 0 }
+  .logo { order: 0; font-size: 16px }
+  .meter { order: 0; margin-left: auto; gap: 6px; padding: 3px 3px 3px 9px; border-radius: 12px }
+  .spec { display: none }
+  .bpm { font-size: 15px }
+  .brand > .chips > * { order: 4 }
+  .brand > .chips > .menu-wrap:first-child, .seg.mode { order: 2 }
+  .brand > .chip { order: 3 }
+  .deck > .chips { order: 5; margin-left: auto; flex-wrap: nowrap; gap: 2px; padding: 3px; border-radius: 999px; background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(10px) }
+  .deck > .chips > .chip { padding: 4px 9px; border: 0; background: none; backdrop-filter: none }
+  .deck > .chips > .chip.on { background: var(--accent) }
+  .deck > .chip { order: 6 }
+  .coop { order: 7; flex-basis: 100% }
+  .chip { padding: 6px 10px }
+  .seg.mode button { padding: 4px 10px }
+  .mix { top: calc(100% + 6px); right: 12px; width: min(290px, calc(100vw - 24px)); max-height: calc(100dvh - 210px); overflow-y: auto; overscroll-behavior: contain }
+
+  .dock { left: 8px; right: 8px; transform: none; max-width: none; bottom: max(8px, env(safe-area-inset-bottom)); gap: 2px; padding: 6px 22px 6px 6px; border-radius: 18px;
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 30px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 30px), transparent) }
+  .dock { scroll-padding-inline: 6px 30px }
+  .pad { width: 48px; padding: 5px 0 4px }
+  .pad.beat-pad { width: 60px }
+  .pad .sw { width: 28px; height: 28px }
+  .pad kbd { display: none }
+  .tool { width: 40px; height: 40px }
+  .drop-corner { right: 10px; bottom: calc(max(8px, env(safe-area-inset-bottom)) + 76px) }
+  .toast { bottom: calc(max(8px, env(safe-area-inset-bottom)) + 132px) }
+  .placer { bottom: calc(max(8px, env(safe-area-inset-bottom)) + 76px) }
+  .mission-card { top: 124px; left: 50% }
+  .director-panel { top: 124px; left: 8px; bottom: 90px; width: auto; right: 8px; max-width: 420px }
+}
+@media (max-height: 500px) {
+  .hint { display: none }
+  .mission-card { top: auto; bottom: calc(max(8px, env(safe-area-inset-bottom)) + 76px); left: 12px; transform: none; width: 240px; padding: 8px 10px; gap: 2px }
+  .mission-card .rave-objective { margin: 2px 0; gap: 2px }
+  .mission-card .rave-objective small { font-size: 11.5px }
+  .mission-card .score { font-size: 17px }
+  .director-panel { top: 96px }
+}

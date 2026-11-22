@@ -155,6 +155,11 @@ export function App() {
     return () => clearTimeout(timer)
   }, [toast.id])
 
+  // On a narrow screen the dock scrolls, so keep the selected tool visible after a key or bumper change.
+  useEffect(() => {
+    dock.current?.children[PADS.findIndex(p => p.tool === tool)]?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [tool])
+
   useEffect(() => {
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)) } catch { /* storage unavailable */ }
     detector.sensitivity = settings.sensitivity
