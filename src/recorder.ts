@@ -26,7 +26,10 @@ export class ClipRecorder {
   private chunks: Blob[] = []
   private until = 0
   private type = ''
+  private viewport = { width: innerWidth, height: innerHeight }
   onDone: ((clip: Clip) => void) | null = null
+
+  setViewport(width: number, height: number) { this.viewport = { width, height } }
 
   get active() { return this.recorder?.state === 'recording' }
   /** Seconds left, or 0. */
@@ -34,9 +37,9 @@ export class ClipRecorder {
 
   start(seconds: number, audio: MediaStream | null) {
     if (this.active) { this.extend(seconds); return }
-    const width = Math.min(1280, Math.round(innerWidth * Math.min(2, devicePixelRatio || 1))) & ~1
+    const width = Math.min(1280, Math.round(this.viewport.width * Math.min(2, devicePixelRatio || 1))) & ~1
     this.canvas.width = width
-    this.canvas.height = Math.round(width * innerHeight / innerWidth) & ~1
+    this.canvas.height = Math.round(width * this.viewport.height / this.viewport.width) & ~1
     const stream = this.canvas.captureStream(30)
     audio?.getAudioTracks().forEach(track => stream.addTrack(track))
     this.type = TYPES.find(t => MediaRecorder.isTypeSupported(t)) ?? ''
@@ -67,7 +70,7 @@ export class ClipRecorder {
   frame(layers: Layers, world: World, view: View, glow: number, shake: [number, number], night = 0) {
     if (!this.active) return
     if (performance.now() >= this.until) { this.stop(); return }
-    const { ctx, canvas } = this, w = canvas.width, h = canvas.height, k = w / innerWidth
+    const { ctx, canvas } = this, w = canvas.width, h = canvas.height, k = w / this.viewport.width
     const hue = world.hue % 360, pulse = world.pulse.kick
 
     ctx.globalCompositeOperation = 'source-over'

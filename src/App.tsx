@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ChangeEvent, CSSProperties, DragEvent, PointerEvent as ReactPointerEvent } from 'react'
+import { MaterialIcon } from './MaterialIcon.tsx'
+import { fitWorld, localPoint } from './viewport.ts'
 import { MapPlayer } from './analysis.ts'
 import { AudioEngine, type SourceMode } from './audio.ts'
 import { paintBeatBrush, type BrushBeats } from './beat-brush.ts'
@@ -42,6 +44,7 @@ const DEFAULT_SETTINGS: Settings = { reactions: DEFAULT_REACTIONS, glow: 1, sens
 const MAX_BRUSH = 30
 const CLIP_SECONDS = 10
 const STEP_MS = 1000 / 60
+const PRIMARY_TOOLS: number[] = [M.Sand, M.Water, M.Wall, M.Fire, M.Oil, M.Lava, M.Glitter, M.Plant, M.Speaker, M.Rocket, BLAST, 200]
 const BEAT_PADS = PADS.filter(pad => isBeatTool(pad.tool))
 
 const SLIDERS: { key: keyof Reactions | 'glow' | 'sensitivity'; label: string; hint: string; min: number; max: number }[] = [
@@ -62,7 +65,8 @@ function loadSettings(): Settings {
 }
 
 function makeWorld(size: WorldSize, scene: SceneId) {
-  const { width, height } = gridFor(innerWidth, innerHeight, size)
+  const field = document.querySelector('.stage')?.getBoundingClientRect()
+  const { width, height } = gridFor(field?.width || innerWidth, field?.height || innerHeight, size)
   const world = new World(width, height)
   buildScene(world, scene)
   return world
@@ -77,6 +81,7 @@ export function App() {
   const [starter, setStarter] = useState(() => isNewPlayer(localStorage, SETTINGS_KEY) && !validCode(INVITE))
   const [coachDone, setCoachDone] = useState<CoachStep[]>([])
   const [allTools, setAllTools] = useState(false)
+  const [expandedTools, setExpandedTools] = useState(false)
   const [tool, setTool] = useState<Tool>(M.Sand)
   const [brush, setBrush] = useState(6)
   const [secondTool, setSecondTool] = useState<Tool>(M.Glitter)
@@ -234,15 +239,17 @@ export function App() {
   function layout() {
     const w = world.current
     if (!w || !layer.current || !overlay.current) return
-    const scale = Math.max(innerWidth / w.width, innerHeight / w.height)
-    view.current = { scale, x: (innerWidth - w.width * scale) / 2, y: (innerHeight - w.height * scale) / 2 }
+    const width = stage.current!.clientWidth, height = stage.current!.clientHeight
+    view.current = fitWorld(width, height, w.width, w.height)
+    const { scale } = view.current
+    recorder.setViewport(width, height)
     Object.assign(layer.current.style, {
       width: `${w.width * scale}px`, height: `${w.height * scale}px`, left: `${view.current.x}px`, top: `${view.current.y}px`,
     })
     const dpr = Math.min(2, devicePixelRatio || 1)
-    overlay.current.width = innerWidth * dpr
-    overlay.current.height = innerHeight * dpr
-    if (sky.current) { sky.current.width = innerWidth * dpr; sky.current.height = innerHeight * dpr }
+    overlay.current.width = width * dpr
+    overlay.current.height = height * dpr
+    if (sky.current) { sky.current.width = width * dpr; sky.current.height = height * dpr }
   }
 
   function install(next: World, restoringDrop = false) {
@@ -315,6 +322,8 @@ export function App() {
   useEffect(() => {
     install(makeWorld(live.current.settings.size, 'garden'))
     addEventListener('resize', layout)
+    const fieldObserver = new ResizeObserver(layout)
+    fieldObserver.observe(stage.current!)
     const root = document.documentElement
     const fx = overlay.current!.getContext('2d')!
     const sctx = spec.current!.getContext('2d')!
@@ -390,7 +399,7 @@ export function App() {
       if (!placing && (pressed & CONTROL.menu)) { changeControllerPage('main'); return }
       if (!placing && (pressed & CONTROL.retry) && retryDrop()) return
 
-      const distance = Math.max(280, Math.min(innerWidth, innerHeight) * .75) * Math.min(dt, .05)
+      const distance = Math.max(280, Math.min(stage.current!.clientWidth, stage.current!.clientHeight) * .75) * Math.min(dt, .05)
       inputs.forEach((input, i) => {
         if (!input) return
         const { aim, fineAim } = input
@@ -400,11 +409,11 @@ export function App() {
         if (acting || seat.point || secondJoined) {
           const mouse = !secondJoined && cursor.current?.controller === undefined ? cursor.current : null
           const point = mouse ?? seat.point ?? {
-            sx: innerWidth * (secondJoined ? (i + 1) / 3 : .5), sy: innerHeight / 2,
+            sx: stage.current!.clientWidth * (secondJoined ? (i + 1) / 3 : .5), sy: stage.current!.clientHeight / 2,
           }
           seat.point = {
-            sx: Math.max(0, Math.min(innerWidth - 1, point.sx + x * distance)),
-            sy: Math.max(0, Math.min(innerHeight - 1, point.sy + y * distance)),
+            sx: Math.max(0, Math.min(stage.current!.clientWidth - 1, point.sx + x * distance)),
+            sy: Math.max(0, Math.min(stage.current!.clientHeight - 1, point.sy + y * distance)),
           }
           if (acting) cursor.current = { ...seat.point, controller: i }
         }
@@ -584,7 +593,7 @@ export function App() {
         for (const c of others) cursors.push({ sx: v.x + (c.x + .5) * v.scale, sy: v.y + (c.y + .5) * v.scale, tool: c.tool, brush: c.brush, label: c.name, color: netColor(c.id) })
       }
       const song = w.scene === 'song' ? getSongShape() : null, songAt = song && audio.mode === 'file' ? audio.fileTime() : null
-      drawOverlay(fx, w, view.current, overlay.current!.width / innerWidth, cursors, challenge.current?.markers ?? (w.scene === 'song' ? songMarkers() : undefined),
+      drawOverlay(fx, w, view.current, overlay.current!.width / stage.current!.clientWidth, cursors, challenge.current?.markers ?? (w.scene === 'song' ? songMarkers() : undefined),
         song && songAt !== null ? playheadColumn(w, song, songAt) : null)
       if (placingNow) drawGhost(fx, ghost.current!.canvas)
       if (recorder.active) {
@@ -602,7 +611,7 @@ export function App() {
         let sum = 0
         for (let i = a; i < b; i++) sum += audio.spectrum[i]
         const v = sum / (b - a) / 255, bh = Math.max(2, v * sh)
-        sctx.fillStyle = `hsl(${w.hue + k * 6},100%,${55 + v * 25}%)`
+        sctx.fillStyle = '#9addd5'
         sctx.fillRect(k * sw / bars + 1, sh - bh, sw / bars - 3, bh)
       }
     }
@@ -620,6 +629,7 @@ export function App() {
       clearInterval(backstop)
       clearTimeout(chromaTimer.current)
       removeEventListener('resize', layout)
+      fieldObserver.disconnect()
       removeEventListener('blur', suspendController)
       audio.stop()
     }
@@ -674,7 +684,7 @@ export function App() {
   }
 
   function drawGhost(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) {
-    const dpr = overlay.current!.width / innerWidth, s = view.current.scale * dpr
+    const dpr = overlay.current!.width / stage.current!.clientWidth, s = view.current.scale * dpr
     const { x, y } = ghostOrigin()
     const X = view.current.x * dpr + x * s, Y = view.current.y * dpr + y * s, Wd = canvas.width * s, Hd = canvas.height * s
     ctx.save()
@@ -1197,22 +1207,22 @@ export function App() {
     e.currentTarget.setPointerCapture(e.pointerId)
     setMixOpen(false)
     setMenu('none')
-    cursor.current = { sx: e.clientX, sy: e.clientY }
+    cursor.current = localPoint(e.clientX, e.clientY, stage.current!.getBoundingClientRect())
     if (placing) {
       if (e.button === 2) { setPlacing(null); say('Image cancelled.') }
       else placeImage()
       return
     }
-    const cell = toCell(e.clientX, e.clientY), erase = e.button === 2
+    const cell = toCell(cursor.current.sx, cursor.current.sy), erase = e.button === 2
     if (erase || !isClickTool(tool)) stroke.current = { id: e.pointerId, erase, last: cell }
     paintAt(cell, erase)
   }
 
   function onPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
-    cursor.current = { sx: e.clientX, sy: e.clientY }
+    cursor.current = localPoint(e.clientX, e.clientY, stage.current!.getBoundingClientRect())
     const s = stroke.current
     if (!s || s.id !== e.pointerId) return
-    const cell = toCell(e.clientX, e.clientY)
+    const cell = toCell(cursor.current.sx, cursor.current.sy)
     if (!isClickTool(tool) || s.erase) paintLine(s.last, cell, s.erase)
     s.last = cell
   }
@@ -1284,7 +1294,7 @@ export function App() {
 
       <header className="hud top">
         <div className="brand">
-          <div className="logo">POWDER<b>RAVE</b></div>
+          <div className="logo" aria-label="Powder Rave">POWDER RAVE <i aria-hidden>///</i></div>
           {!starter && <button className={`chip ${directorOpen ? 'on' : ''}`} aria-expanded={directorOpen} onClick={() => {
             if (session.current.active || session.current.finished) { say('Return to Sandbox to use the Director.'); return }
             if (hostOnly()) return
@@ -1294,10 +1304,10 @@ export function App() {
             <div className="menu-wrap">
               <button className={`chip scene-btn ${menu === 'scenes' ? 'on' : ''}`} aria-expanded={menu === 'scenes'}
                 onClick={() => setMenu(m => m === 'scenes' ? 'none' : 'scenes')}>
-                {scene === 'song' ? `♪ ${getSongShape()?.name ?? 'Song world'}` : SCENES.find(x => x.id === scene)?.name ?? 'World'} <span aria-hidden>▾</span>
+                <span className="world-label">Worlds</span><span className="world-current">{scene === 'song' ? 'Song World' : SCENES.find(x => x.id === scene)?.name}</span><span aria-hidden>⌄</span>
               </button>
               {menu === 'scenes' && (
-                <div className="menu" role="menu">
+                <div className="menu" role="menu" aria-label="Worlds"><div className="panel-heading">Worlds<button aria-label="Close worlds" onClick={() => setMenu('none')}>×</button></div>
                   {songName && (
                     <button role="menuitem" className={`song-item ${scene === 'song' ? 'on' : ''}`} onClick={() => { setMenu('none'); loadScene('song') }}>
                       <b>♪ {songName}</b><small>A world shaped by your song: loud parts are mountains, quiet parts are lakes, and every drop is a lava crater.</small>
@@ -1347,7 +1357,33 @@ export function App() {
             </div>
           )}
         </div>
-        <div className="deck">
+        <div className="header-tools">        <button className={`tool ${settings.night ? 'on' : ''}`} title={settings.night ? 'Lights on (N)' : 'Night mode (N)'} aria-pressed={settings.night}
+          onClick={() => setSettings(s => ({ ...s, night: !s.night }))}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" />
+          </svg>
+        </button>
+        {canFullscreen && (
+          <button className="tool" title={fullscreen ? 'Exit full screen (F)' : 'Full screen (F)'} aria-pressed={fullscreen} onClick={toggleFullscreen}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              {fullscreen
+                ? <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
+                : <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />}
+            </svg>
+          </button>
+        )}
+        </div>
+      </header>
+      <section className="deck hud" aria-label="Audio and transport">
+        <div className="transport">        <button className="tool" title={paused ? 'Resume (Space)' : 'Freeze (Space)'} onClick={() => setPaused(p => !p)}>{paused ? '▶' : '❚❚'}</button>
+        <button className="tool" title="Reset scene (R)" onClick={() => loadScene(scene)}>↺</button>
+        <button hidden={starter} className={`tool ${placing ? 'on' : ''}`} title="Drop an image into the world (I). You can also drag one in or paste it." onClick={() => imagePicker.current?.click()}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="2" /><path d="m21 17-5-5-9 8" />
+          </svg>
+        </button>
+</div>
+        <div className="track-name" title={source === 'file' ? audio.fileName : undefined}><small>AUDIO IN</small><strong>{source === 'file' ? audio.fileName : source === 'demo' ? 'DEMO LOOP' : source === 'tab' ? 'TAB AUDIO' : source === 'mic' ? 'MICROPHONE' : 'SELECT A SOURCE'}</strong></div>
           <div className="chips">
             {(['demo', 'file', 'mic', 'tab'] as const).map(m => (
               <button key={m} className={`chip ${source === m ? 'on' : ''}`} onClick={() => pickSource(m)}>
@@ -1388,7 +1424,7 @@ export function App() {
             <button className="chip on song-chip" title="Build a world shaped by this song" onClick={() => loadScene('song')}>Build its world</button>
           )}
           {mixOpen && !starter && (
-            <section className="mix" aria-label="Mix and world settings">
+            <section className="mix" aria-label="Mix and world settings"><div className="panel-heading">Mix<button aria-label="Close mix" onClick={() => setMixOpen(false)}>×</button></div>
               <label className="slider" title="Aurora, light beams and drifting particles behind the world">
                 <span>Atmosphere<em>{Math.round(settings.atmosphere * 100)}%</em></span>
                 <input type="range" min="0" max="1" step=".1" value={settings.atmosphere}
@@ -1434,49 +1470,29 @@ export function App() {
               <button className="reset-mix" onClick={() => setSettings(s => ({ ...DEFAULT_SETTINGS, size: s.size, dropRumble: s.dropRumble, crowd: s.crowd, night: s.night }))}>Reset mix</button>
             </section>
           )}
-        </div>
-      </header>
+      </section>
 
-      <nav ref={dock} className="hud dock">
+      <nav ref={dock} className="hud dock" aria-label="Materials and tools">
         {PADS.map(p => (
-          <button key={p.tool} hidden={!visiblePads.includes(p)} className={`pad ${isBeatTool(p.tool) ? 'beat-pad ' : ''}${tool === p.tool ? 'on' : ''}`} style={{ '--c': p.swatch } as CSSProperties}
+          <button key={p.tool} hidden={!visiblePads.includes(p) || (!fewTools && !expandedTools && !PRIMARY_TOOLS.includes(p.tool) && tool !== p.tool)} className={`pad ${isBeatTool(p.tool) ? 'beat-pad ' : ''}${tool === p.tool ? 'on' : ''}`} style={{ '--c': p.swatch } as CSSProperties}
             title={`${p.name} (${p.key}): ${p.hint}`} aria-pressed={tool === p.tool} onClick={() => setTool(p.tool)}>
-            <kbd>{p.key}</kbd><i className="sw" /><span>{p.name}</span>
+            <kbd>{p.key}</kbd><MaterialIcon tool={p.tool} /><span>{p.name}</span>
           </button>
         ))}
-        {fewTools && (
-          <button className="pad more-pad" title="Show every material and tool" onClick={() => setAllTools(true)}>
-            <i className="sw" aria-hidden>+</i><span>More</span>
+        {(fewTools || !starter) && (
+          <button className={`pad more-pad ${expandedTools ? 'on' : ''}`} title="Show every material and tool" aria-expanded={expandedTools} onClick={() => { setAllTools(true); setExpandedTools(v => !v) }}>
+            <i className="more-icon" aria-hidden>•••</i><span>{expandedTools ? 'Less' : 'More'}</span>
           </button>
         )}
-        <i className="sep" />
-        <button className="tool" title="Smaller brush ([)" onClick={() => setBrush(b => Math.max(1, b - 1))}>−</button>
-        <span className="size" title="Brush size (scroll to change)">{brush}</span>
-        <button className="tool" title="Bigger brush (])" onClick={() => setBrush(b => Math.min(MAX_BRUSH, b + 1))}>+</button>
-        <button className="tool" title={paused ? 'Resume (Space)' : 'Freeze (Space)'} onClick={() => setPaused(p => !p)}>{paused ? '▶' : '❚❚'}</button>
-        <button className="tool" title="Reset scene (R)" onClick={() => loadScene(scene)}>↺</button>
-        <button hidden={starter} className={`tool ${placing ? 'on' : ''}`} title="Drop an image into the world (I). You can also drag one in or paste it." onClick={() => imagePicker.current?.click()}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            <rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="2" /><path d="m21 17-5-5-9 8" />
-          </svg>
-        </button>
-        <button className={`tool ${settings.night ? 'on' : ''}`} title={settings.night ? 'Lights on (N)' : 'Night mode (N)'} aria-pressed={settings.night}
-          onClick={() => setSettings(s => ({ ...s, night: !s.night }))}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" />
-          </svg>
-        </button>
-        {canFullscreen && (
-          <button className="tool" title={fullscreen ? 'Exit full screen (F)' : 'Full screen (F)'} aria-pressed={fullscreen} onClick={toggleFullscreen}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              {fullscreen
-                ? <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
-                : <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />}
-            </svg>
-          </button>
-        )}
-        <i className="sep" />
       </nav>
+      <div className="brush-controls hud">
+        <label htmlFor="brush-size">Brush</label>
+        <div><button className="tool" aria-label="Smaller brush" onClick={() => setBrush(b => Math.max(1, b - 1))}>−</button>
+          <input id="brush-size" aria-label="Brush size" type="range" min="1" max={MAX_BRUSH} value={brush} onChange={e => setBrush(+e.target.value)} />
+          <button className="tool" aria-label="Bigger brush" onClick={() => setBrush(b => Math.min(MAX_BRUSH, b + 1))}>+</button>
+          <output htmlFor="brush-size">{String(brush).padStart(2, '0')}</output></div>
+      </div>
+
 
       {!splash && (
         <div className="drop-corner">
@@ -1583,7 +1599,7 @@ export function App() {
       )}
       {directorOpen && !splash && <Director getWorld={() => world.current} context={directorContext} apply={applyDirector}
         undo={undoDirector} canUndo={canDirectorUndo && !rave.active && !rave.finished} close={() => setDirectorOpen(false)} />}
-      {activePad && !splash && <div className="hint" key={activePad.name}>{activePad.hint}</div>}
+      {activePad && !splash && <footer className="status-line"><span><b>{activePad.name}</b><i>/</i>{activePad.hint}</span><span className="keyboard-hints"><kbd>SPACE</kbd> Pause <kbd>R</kbd> Reset <kbd>I</kbd> Image</span></footer>}
       {countdown !== null && <div className="countdown" key={countdown}>DROP IN <b>{countdown}</b></div>}
       {clip && (
         <div className="clip" role="dialog" aria-label="Your clip">

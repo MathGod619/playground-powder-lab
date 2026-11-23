@@ -1,0 +1,9 @@
+/** All pointer, overlay and recording coordinates are local to the playfield. */
+export function fitWorld(width: number, height: number, worldWidth: number, worldHeight: number) {
+  const scale = Math.min(width / worldWidth, height / worldHeight)
+  return { scale, x: (width - worldWidth * scale) / 2, y: (height - worldHeight * scale) / 2 }
+}
+
+export function localPoint(x: number, y: number, bounds: { left: number; top: number }) {
+  return { sx: x - bounds.left, sy: y - bounds.top }
+}
