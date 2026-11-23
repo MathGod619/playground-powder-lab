@@ -68,6 +68,18 @@ function canvas() {
   return target
 }
 
+test('light rendering keeps base pixels identical while skipping glow uploads', () => {
+  const w = new World(20, 20, seeded()), base = canvas(), glow = canvas(), bloom = canvas()
+  for (let x = 0; x < w.width; x++) w.set(x, 10, x % 2 ? M.Lava : M.Glitter)
+  const draw = createRenderer(w, base, glow, bloom)
+  draw(0, false)
+  const light = base.image.slice()
+  assert.equal(glow.image, null, 'no glow buffer was uploaded')
+  draw(0, true)
+  assert.deepEqual(base.image, light, 'material colors and positions are unchanged')
+  assert.ok(glow.image.some(c => c !== 0), 'Full effects still produces the emissive layer')
+})
+
 test('column-cached plant animation preserves exact colors and refreshes each draw', () => {
   const w = new World(40, 30, seeded()), base = canvas(), glow = canvas()
   for (let y = 0; y < w.height; y++) for (let x = 0; x < w.width; x++) w.set(x, y, M.Plant, y % 2 ? 20 : 0)

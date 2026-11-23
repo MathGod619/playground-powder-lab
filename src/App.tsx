@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ChangeEvent, CSSProperties, DragEvent, PointerEvent as ReactPointerEvent } from 'react'
+import { effectProfile, LIGHT_DEVICE_QUERY, type EffectQuality } from './device-performance.ts'
+import { SnapshotInbox } from './snapshot-inbox.ts'
 import { MaterialIcon } from './MaterialIcon.tsx'
 import { fitWorld, localPoint } from './viewport.ts'
 import { MapPlayer } from './analysis.ts'
@@ -29,7 +31,7 @@ import { readLocal, writeLocal } from './storage.ts'
 import { COACH_STEPS, completeStep, currentStep, isNewPlayer, ONBOARDED_KEY, STARTER_TOOLS, stepForPaint, type CoachStep } from './onboarding.ts'
 import { DEFAULT_REACTIONS, World, type Reactions, type SceneId } from './world.ts'
 
-type Settings = { reactions: Reactions; glow: number; sensitivity: number; size: WorldSize; atmosphere: number; dropRumble: boolean; crowd: boolean; night: boolean }
+type Settings = { quality: EffectQuality; reactions: Reactions; glow: number; sensitivity: number; size: WorldSize; atmosphere: number; dropRumble: boolean; crowd: boolean; night: boolean }
 type Cell = { x: number; y: number }
 type Brush = { tool: Tool; brush: number }
 type Stroke = { last: Cell; erase: boolean }
@@ -40,7 +42,7 @@ const NET_COLORS = ['#80f2ff', '#ff9bda', '#ffe66b', '#7dffb3']
 const netColor = (id: number) => NET_COLORS[id % NET_COLORS.length]
 /** A ?join=CODE invite link in the address. */
 const INVITE = typeof location === 'undefined' ? '' : cleanCode(new URLSearchParams(location.search).get('join') ?? '')
-const DEFAULT_SETTINGS: Settings = { reactions: DEFAULT_REACTIONS, glow: 1, sensitivity: 1, size: 'medium', atmosphere: 1, dropRumble: true, crowd: true, night: false }
+const DEFAULT_SETTINGS: Settings = { quality: 'auto', reactions: DEFAULT_REACTIONS, glow: 1, sensitivity: 1, size: 'medium', atmosphere: 1, dropRumble: true, crowd: true, night: false }
 const MAX_BRUSH = 30
 const CLIP_SECONDS = 10
 const STEP_MS = 1000 / 60
@@ -57,11 +59,13 @@ const SLIDERS: { key: keyof Reactions | 'glow' | 'sensitivity'; label: string; h
 ]
 
 function loadSettings(): Settings {
+  const phone = matchMedia(LIGHT_DEVICE_QUERY).matches
+  const defaults: Settings = { ...DEFAULT_SETTINGS, size: phone ? 'small' : 'medium' }
   try {
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? 'null')
-    if (saved) return { ...DEFAULT_SETTINGS, ...saved, reactions: { ...DEFAULT_REACTIONS, ...saved.reactions } }
+    if (saved) return { ...defaults, ...saved, ...(!saved.quality && phone && saved.size !== 'large' ? { size: 'small' } : {}), reactions: { ...DEFAULT_REACTIONS, ...saved.reactions } }
   } catch { /* storage unavailable */ }
-  return DEFAULT_SETTINGS
+  return defaults
 }
 
 function makeWorld(size: WorldSize, scene: SceneId) {
@@ -76,6 +80,8 @@ const describe = (error: unknown) => error instanceof Error ? error.message : 'S
 
 export function App() {
   const [settings, setSettings] = useState(loadSettings)
+  const [constrained, setConstrained] = useState(() => matchMedia(LIGHT_DEVICE_QUERY).matches)
+  const profile = effectProfile(settings.quality, constrained)
   const [splash, setSplash] = useState(true)
   // First-run guide: a new player sees a few tools and three steps that lead to their first drop.
   const [starter, setStarter] = useState(() => isNewPlayer(localStorage, SETTINGS_KEY) && !validCode(INVITE))
@@ -112,7 +118,8 @@ export function App() {
   const [netError, setNetError] = useState('')
   const remoteStrokes = useRef(new Map<number, Stroke & Brush & { world: World; seen: number }>())
   const remoteCursors = useRef(new Map<number, RemoteCursor & { seen: number }>())
-  const guestView = useRef<{ cursors: RemoteCursor[]; haveKey: boolean; queue: Promise<void> }>({ cursors: [], haveKey: false, queue: Promise.resolve() })
+  const guestView = useRef<{ cursors: RemoteCursor[]; haveKey: boolean }>({ cursors: [], haveKey: false })
+  const [snapshotInbox] = useState(() => new SnapshotInbox(unpack, applyHostSnapshot, () => { guestView.current.haveKey = false }))
   const hostSync = useRef<{ base: SyncBase | null; sending: boolean; lastSent: number; lastKey: number; needKey: boolean; lastMusic: number }>(
     { base: null, sending: false, lastSent: 0, lastKey: 0, needKey: true, lastMusic: 0 })
   const musicHint = useRef('')
@@ -175,13 +182,13 @@ export function App() {
   const chromaTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const catching = useRef(false)
   const world = useRef<World>(null!)
-  const draw = useRef<(night?: number) => void>(() => {})
+  const draw = useRef<(night?: number, glowEnabled?: boolean) => void>(() => {})
   const view = useRef<View>({ x: 0, y: 0, scale: 1 })
   const controllerBlocked = directorOpen || !!clip || dragging
   const fewTools = starter && !allTools
   const visiblePads = fewTools ? PADS.filter(pad => STARTER_TOOLS.includes(pad.tool)) : PADS
-  const live = useRef({ tool, brush, secondTool, secondBrush, paused, settings, splash, armed, placing: !!placing, controllerBlocked, controllerPage, starter, visiblePads })
-  live.current = { tool, brush, secondTool, secondBrush, paused, settings, splash, armed, placing: !!placing, controllerBlocked, controllerPage, starter, visiblePads }
+  const live = useRef({ tool, brush, secondTool, secondBrush, paused, settings, splash, armed, placing: !!placing, controllerBlocked, controllerPage, starter, visiblePads, profile })
+  live.current = { tool, brush, secondTool, secondBrush, paused, settings, splash, armed, placing: !!placing, controllerBlocked, controllerPage, starter, visiblePads, profile }
   const stroke = useRef<(Stroke & { id: number }) | null>(null)
   const cursor = useRef<(Cursor & { controller?: number }) | null>(null)
 
@@ -236,17 +243,26 @@ export function App() {
     detector.sensitivity = settings.sensitivity
   }, [settings])
 
+  useEffect(() => {
+    const query = matchMedia(LIGHT_DEVICE_QUERY)
+    const change = () => setConstrained(query.matches)
+    query.addEventListener('change', change)
+    return () => query.removeEventListener('change', change)
+  }, [])
+
+  useLayoutEffect(() => { if (world.current) layout() }, [profile.dpr])
+
   function layout() {
     const w = world.current
     if (!w || !layer.current || !overlay.current) return
     const width = stage.current!.clientWidth, height = stage.current!.clientHeight
     view.current = fitWorld(width, height, w.width, w.height)
     const { scale } = view.current
-    recorder.setViewport(width, height)
     Object.assign(layer.current.style, {
       width: `${w.width * scale}px`, height: `${w.height * scale}px`, left: `${view.current.x}px`, top: `${view.current.y}px`,
     })
-    const dpr = Math.min(2, devicePixelRatio || 1)
+    const dpr = Math.min(live.current.profile.dpr, devicePixelRatio || 1)
+    recorder.setViewport(width, height, dpr)
     overlay.current.width = width * dpr
     overlay.current.height = height * dpr
     if (sky.current) { sky.current.width = width * dpr; sky.current.height = height * dpr }
@@ -475,7 +491,7 @@ export function App() {
 
     // One frame of the game. The animation loop runs it; while hosting online, a timer also runs it if the
     // tab is in the background (browsers pause animation frames there, which would freeze everyone's rave).
-    let lastFrame = performance.now()
+    let lastFrame = performance.now(), lastPaint = -Infinity
     const tick = (now: number) => {
       const w = world.current
       const { tool, brush, secondTool, secondBrush, settings, splash, armed, controllerPage } = live.current
@@ -561,6 +577,9 @@ export function App() {
         setRave(r.status)
       }
 
+      const visual = live.current.profile
+      if (visual.light && now - lastPaint < 1000 / visual.fps - .5) return
+      lastPaint = now
       const shake = w.pulse.shake, sx = (Math.random() - .5) * shake, sy = (Math.random() - .5) * shake
       if (layer.current) layer.current.style.transform = `translate(${sx}px,${sy}px) scale(${1 + w.pulse.kick * .006})`
       root.style.setProperty('--hue', (w.hue % 360).toFixed(1))
@@ -568,10 +587,10 @@ export function App() {
       root.style.setProperty('--glow', String(settings.glow))
       root.style.setProperty('--energy', energy.level.toFixed(3))
 
-      drawAtmosphere(sky.current!.getContext('2d')!, w, now / 1000, settings.atmosphere)
+      drawAtmosphere(sky.current!.getContext('2d')!, w, now / 1000, visual.light ? 0 : settings.atmosphere)
       nightLevel += ((settings.night ? 1 : 0) - nightLevel) * Math.min(1, dt * 3)
       if (nightLevel < .002) nightLevel = 0
-      draw.current(nightLevel)
+      draw.current(nightLevel, visual.glow)
       stage.current?.classList.toggle('night', nightLevel > .5)
       const placingNow = live.current.placing && ghost.current
       const cursors: BrushCursor[] = []
@@ -598,7 +617,7 @@ export function App() {
       if (placingNow) drawGhost(fx, ghost.current!.canvas)
       if (recorder.active) {
         recorder.frame({ sky: sky.current!, base: base.current!, glow: glow.current!, bloom: bloom.current!, overlay: overlay.current! }, w, view.current,
-          settings.glow, [sx, sy], nightLevel)
+          visual.glow ? settings.glow : 0, [sx, sy], nightLevel)
         const left = Math.ceil(recorder.remaining())
         if (left !== shownRec) { shownRec = left; setRecording(left) }
       } else if (shownRec) { shownRec = 0; setRecording(0) }
@@ -909,31 +928,30 @@ export function App() {
     }
   }
 
-  /** Guest: decode and draw a snapshot, in arrival order. */
-  function onSnapshot(packed: Uint8Array) {
-    const g = guestView.current
-    g.queue = g.queue.then(async () => {
-      if (online.current.role !== 'guest') return
-      const bytes = await unpack(packed)
-      const head = snapshotSize(bytes)
-      let w = world.current
-      if (w.width !== head.width || w.height !== head.height) {
-        if (!head.keyframe) return
-        w = new World(head.width, head.height)
-        install(w)
-        g.haveKey = false
-      }
-      const info = applySnapshot(w, bytes, g.haveKey)
-      if (!info) return
-      if (head.keyframe) g.haveKey = true
-      g.cursors = info.cursors
-      setScene(info.scene)
-    }).catch(() => { /* a bad snapshot is skipped; the next keyframe recovers */ })
+  /** Guest: apply ordered decoded snapshots; the inbox bounds slow-device work. */
+  function applyHostSnapshot(bytes: Uint8Array) {
+    if (online.current.role !== 'guest') return
+    const g = guestView.current, head = snapshotSize(bytes)
+    let w = world.current
+    if (w.width !== head.width || w.height !== head.height) {
+      if (!head.keyframe) return
+      w = new World(head.width, head.height)
+      install(w)
+      g.haveKey = false
+    }
+    const info = applySnapshot(w, bytes, g.haveKey)
+    if (!info) return
+    if (head.keyframe) g.haveKey = true
+    g.cursors = info.cursors
+    setScene(info.scene)
   }
+
+  function onSnapshot(packed: Uint8Array) { snapshotInbox.offer(packed) }
 
   useEffect(() => {
     const net = online.current
     net.on('room', (code, _you, players, role) => {
+      snapshotInbox.reset()
       setNet({ role, code, players })
       setNetError('')
       if (role === 'guest') {
@@ -957,6 +975,7 @@ export function App() {
     net.on('snapshot', onSnapshot)
     net.on('note', onHostNote)
     net.on('closed', reason => {
+      snapshotInbox.reset()
       setNet(null)
       remoteStrokes.current.clear(); remoteCursors.current.clear(); guestView.current.cursors = []
       say(`${reason} You keep the world.`)
@@ -979,6 +998,7 @@ export function App() {
   }
 
   function leaveOnline() {
+    snapshotInbox.reset()
     const wasHost = online.current.role === 'host'
     online.current.leave()
     setNet(null)
@@ -1276,7 +1296,7 @@ export function App() {
   }
 
   return (
-    <div className="app" onDragOver={e => { e.preventDefault(); setDragging(true) }}
+<div className={`app ${profile.light ? 'light-render' : ''}`} onDragOver={e => { e.preventDefault(); setDragging(true) }}
       onDragLeave={e => { if (!e.relatedTarget) setDragging(false) }} onDrop={onDrop}>
       <div ref={stage} className="stage" onPointerDown={onPointerDown} onPointerMove={onPointerMove}
         onPointerUp={endStroke} onPointerCancel={endStroke}
@@ -1454,6 +1474,12 @@ export function App() {
                 <button className={settings.crowd ? 'on' : ''} onClick={() => setSettings(s => ({ ...s, crowd: true }))}>Ravers on</button>
                 <button className={settings.crowd ? '' : 'on'} onClick={() => setSettings(s => ({ ...s, crowd: false }))}>Off</button>
               </div>
+              <div className="row-label">Effects</div>
+              <div className="seg" role="group" aria-label="Effect quality">
+                {(['auto', 'full', 'light'] as const).map(quality => <button key={quality} className={settings.quality === quality ? 'on' : ''}
+                  aria-pressed={settings.quality === quality} onClick={() => setSettings(s => ({ ...s, quality }))}>{quality === 'auto' ? 'Auto' : quality === 'full' ? 'Full' : 'Light'}</button>)}
+              </div>
+              <small className="quality-hint">{profile.light ? 'Light effects · 30 fps visuals. Physics and online actions stay active.' : 'Full effects · bloom and atmosphere.'}</small>
               <div className="row-label">World detail</div>
               <div className="seg">
                 {WORLD_SIZES.map(s => (

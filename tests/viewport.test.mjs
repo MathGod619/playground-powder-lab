@@ -20,6 +20,7 @@ test('resizing and imported worlds keep every edge inside the unobstructed playf
       assert.ok(view.x >= -1e-9 && view.y >= -1e-9)
       assert.ok(view.x + worldWidth * view.scale <= width + 1e-9)
       assert.ok(view.y + worldHeight * view.scale <= height + 1e-9)
+      assert.ok(Math.abs(view.y + worldHeight * view.scale - height) < 1e-9, 'the ground stays at the bottom')
     }
   }
 })

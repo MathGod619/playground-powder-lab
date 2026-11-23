@@ -26,10 +26,10 @@ export class ClipRecorder {
   private chunks: Blob[] = []
   private until = 0
   private type = ''
-  private viewport = { width: innerWidth, height: innerHeight }
+  private viewport = { width: innerWidth, height: innerHeight, dpr: 2 }
   onDone: ((clip: Clip) => void) | null = null
 
-  setViewport(width: number, height: number) { this.viewport = { width, height } }
+  setViewport(width: number, height: number, dpr = 2) { this.viewport = { width, height, dpr } }
 
   get active() { return this.recorder?.state === 'recording' }
   /** Seconds left, or 0. */
@@ -37,7 +37,7 @@ export class ClipRecorder {
 
   start(seconds: number, audio: MediaStream | null) {
     if (this.active) { this.extend(seconds); return }
-    const width = Math.min(1280, Math.round(this.viewport.width * Math.min(2, devicePixelRatio || 1))) & ~1
+    const width = Math.min(1280, Math.round(this.viewport.width * Math.min(this.viewport.dpr, devicePixelRatio || 1))) & ~1
     this.canvas.width = width
     this.canvas.height = Math.round(width * this.viewport.height / this.viewport.width) & ~1
     const stream = this.canvas.captureStream(30)

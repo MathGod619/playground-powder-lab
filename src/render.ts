@@ -28,7 +28,7 @@ export function createRenderer(world: World, base: HTMLCanvasElement, glow: HTML
    * `night` (0–1) darkens everything that does not glow and tints it moonlight blue, so only lava, fire,
    * glitter, lit windows, sparks and glow sticks show. The drop flash and kicks briefly light the world up.
    */
-  return function draw(night = 0) {
+  return function draw(night = 0, glowEnabled = true) {
     const { type, color, life, pulse } = world
     gpix.fill(0)
     plantColors.fill(0)
@@ -89,9 +89,11 @@ export function createRenderer(world: World, base: HTMLCanvasElement, glow: HTML
     if (world.boss) drawBoss(world, pix, gpix)
     if (night > 0) darken(world, pix, gpix, night)
     ctx.putImageData(image, 0, 0)
-    gctx.putImageData(glowImage, 0, 0)
-    bctx.clearRect(0, 0, bloom.width, bloom.height)
-    bctx.drawImage(glow, 0, 0, bloom.width, bloom.height)
+    if (glowEnabled) {
+      gctx.putImageData(glowImage, 0, 0)
+      bctx.clearRect(0, 0, bloom.width, bloom.height)
+      bctx.drawImage(glow, 0, 0, bloom.width, bloom.height)
+    }
   }
 }
 
