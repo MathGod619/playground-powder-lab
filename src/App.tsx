@@ -1382,7 +1382,6 @@ export function App() {
             if (hostOnly()) return
             setDirectorOpen(o => !o); setMixOpen(false); setMenu('none')
           }}>Director</button>}
-          {!starter && <button className="chip image-lab-trigger" onClick={openImageLab}>Image Lab</button>}
           <div className="chips">
             <div className="menu-wrap">
               <button className={`chip scene-btn ${menu === 'scenes' ? 'on' : ''}`} aria-expanded={menu === 'scenes'}

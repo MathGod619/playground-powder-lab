@@ -49,7 +49,7 @@ export function ImageLab(props: Props) {
   const [demo, setDemo] = useState(false), [cut, setCut] = useState(false), [playing, setPlaying] = useState(false)
   const [error, setError] = useState('')
   const demoPixels = useMemo(demoImage, [])
-  const source = props.image ?? (demo ? demoPixels : null)
+  const source = demo ? demoPixels : props.image
   const info = IMAGE_PRESETS.find(p => p.id === preset)!
   const previewScale = Math.min(1, 320 / props.width, 240 / props.height)
   const width = Math.max(48, Math.round(props.width * previewScale)), height = Math.max(40, Math.round(props.height * previewScale))
@@ -110,36 +110,44 @@ export function ImageLab(props: Props) {
   }
 
   return <dialog ref={dialog} className="image-lab" aria-labelledby="image-lab-title" onCancel={event => { event.preventDefault(); props.onClose() }}>
-    <div className="image-lab-heading"><div><span className="eyebrow">PICTURES INTO PARTICLES</span><h2 id="image-lab-title">Image Lab<span>///</span></h2></div>
-      <button data-close className="tool" aria-label="Close Image Lab" onClick={props.onClose}>×</button></div>
+    <header className="image-lab-heading">
+      <h2 id="image-lab-title">Image Lab<span>///</span></h2>
+      <button data-close className="tool" aria-label="Close Image Lab" onClick={props.onClose}>×</button>
+    </header>
     <div className="image-lab-body">
-      <div className="image-lab-preview-column">
-        <div className="image-lab-source"><button className="chip on" onClick={props.onChoose}>{props.image ? 'Change image' : 'Choose image'}</button>
-          <button className={`chip ${demo && !props.image ? 'on' : ''}`} onClick={() => setDemo(true)} disabled={!!props.image}>Try demo artwork</button>
-          <label><input type="checkbox" checked={cut} disabled={!source} onChange={event => setCut(event.target.checked)} /> Cut background</label></div>
-        <div className="image-lab-preview"><canvas ref={canvas} role="img" aria-label={`${info.name} scene preview`} />
-          {!source && <div className="image-lab-empty"><b>Your picture.<br />A new kind of drop.</b><span>Pick a photo, cover art, or a logo.</span></div>}
-          <span className="preview-label">{playing ? 'LIVE PHYSICS PREVIEW' : source ? 'READY FOR THE DROP' : 'PRESET PREVIEW'}</span>
-        </div>
-
-        <p className="image-lab-copy">Your image keeps its colors. Each pixel becomes a real grain you can remix with sand, speakers, and the beat.</p>
-        {(props.canReset || props.canUndo) && <div className="image-lab-history">
-          {props.canReset && <button className="chip" onClick={props.onReset}>Reset current image scene</button>}
-          {props.canUndo && <button className="chip" onClick={props.onUndo}>Restore previous world</button>}
-        </div>}
-      </div>
       <div className="image-lab-presets" role="group" aria-label="Image presets">
-        <span className="eyebrow">CHOOSE YOUR SETUP</span>
         {IMAGE_PRESETS.map(item => <button key={item.id} className={`image-preset ${preset === item.id ? 'selected' : ''}`} aria-pressed={preset === item.id} onClick={() => setPreset(item.id)}>
-          <span className={`preset-mark ${item.id}`} aria-hidden="true"><i /><i /><i /></span>
-          <span><small>{item.tag}</small><strong>{item.name}</strong><span>{item.detail}</span></span>
+          {item.name}
         </button>)}
       </div>
+      <p className="image-lab-description">{info.detail}</p>
+      <div className="image-lab-preview"><canvas ref={canvas} role="img" aria-label={`${info.name} scene preview`} />
+        {!source ? <div className="image-lab-empty">
+          <b>Your picture, in motion.</b>
+          <button className="chip on" onClick={props.onChoose}>Choose image</button>
+          <button className="lab-text-button" onClick={() => setDemo(true)}>Try demo artwork</button>
+        </div> : <>
+          <div className="image-lab-source"><button onClick={() => { setDemo(false); props.onChoose() }}>Change image</button></div>
+          <button className="lab-preview-play" onClick={preview} aria-label={playing ? 'Restart preview' : 'Preview effect'}>
+            <span aria-hidden="true">▶</span> {playing ? 'Replay' : 'Preview'}
+          </button>
+        </>}
+      </div>
+      <details className="image-lab-options"><summary>More options</summary>
+        <div className="image-lab-options-body">
+          <label><input type="checkbox" checked={cut} disabled={!source} onChange={event => setCut(event.target.checked)} /> Remove background</label>
+          <button className="lab-text-button" disabled={!source} onClick={() => usePhoto(true)}>Stamp into my current world</button>
+          {props.canReset && <button className="lab-text-button" onClick={props.onReset}>Reset current image scene</button>}
+          {props.canUndo && <button className="lab-text-button" onClick={props.onUndo}>Restore previous world</button>}
+          {source && <button className="lab-text-button" onClick={() => setDemo(true)}>Use demo artwork</button>}
+          <p>Images stay on this device. Online rooms share the resulting world.</p>
+        </div>
+      </details>
+      {error && <p className="image-lab-error" role="alert">{error}</p>}
     </div>
-    {error && <p className="image-lab-error" role="alert">{error}</p>}
-    <div className="image-lab-footer"><div><b>{info.name}</b><span>Build a fresh scene, then press DROP. Your previous world can be restored.</span></div>
-      <button className="chip" disabled={!source} onClick={preview}>{playing ? 'Restart preview' : 'Preview effect'}</button>
-      <button className="lab-build" disabled={!source} onClick={() => usePhoto()}>Build scene</button></div>
-    <div className="image-lab-advanced"><button disabled={!source} onClick={() => usePhoto(true)}>Or stamp the image into my current world</button><span>Processed on this device. Online rooms share the resulting world.</span></div>
+    <footer className="image-lab-footer">
+      <span>Build it. Then hit <b>DROP.</b></span>
+      <button className="lab-build" disabled={!source} onClick={() => usePhoto()}>Build scene <span aria-hidden="true">↗</span></button>
+    </footer>
   </dialog>
 }
