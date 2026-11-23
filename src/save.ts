@@ -1,6 +1,7 @@
 import { HOPPER, M } from './materials.ts'
 import { attachScene, SCENE_IDS } from './scenes.ts'
 import { World, type SceneId } from './world.ts'
+import { restoreImageEffect } from './image-presets.ts'
 
 export const SAVE_KEY = 'powder-rave-save-v1'
 export const MAX_FILE_BYTES = 16_000_000
@@ -41,6 +42,7 @@ export function encodeWorld(world: World) {
     craterY: world.craterY,
     marks: world.marks,
     hue: world.hue,
+    ...(world.imageEffect ? { imageEffect: world.imageEffect } : {}),
     physics: { gravity: world.rules.gravity, fall: world.rules.fall, wind: world.directorWind,
       plantsInWater: world.rules.plantsInWater, throughWater: world.rules.throughWater },
     type: toBase64(type),
@@ -85,5 +87,6 @@ export function decodeWorld(json: string) {
       ...(typeof p.throughWater === 'boolean' ? { throughWater: p.throughWater } : {}) }
     world.directorWind = p.wind
   }
+  if (data.imageEffect !== undefined) restoreImageEffect(world, data.imageEffect)
   return world
 }

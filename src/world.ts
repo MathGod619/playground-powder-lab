@@ -2,6 +2,7 @@ import { colorFor, FIRE_PALETTE, hsl, obsidian, pack, STEAM, type Rng } from './
 import { bossBlast, bossDrop, bossKick, stepBoss, type Boss } from './boss.ts'
 import { crowdDrop, crowdHat, crowdKick, crowdPush, stepCrowd, type Raver } from './crowd.ts'
 import type { Energy } from './immersion.ts'
+import type { ImageEffect } from './image-presets.ts'
 import {
   BOMB_DROP_ONLY, BOMB_FIXED, BOMB_FUSE, BREAKABLE, BRUSH_DENSITY, DENSITY, ERASE, FLUID, HOPPER, M, OVERWRITES, POWDER, type Tool,
 } from './materials.ts'
@@ -90,6 +91,8 @@ export class World {
   ravers: Raver[] = []
   /** The Boss Drop monster (see boss.ts), only in that challenge. */
   boss: Boss | null = null
+  /** Optional Image Lab scene metadata; the core simulation still uses ordinary cells. */
+  imageEffect: ImageEffect | null = null
 
   constructor(width: number, height: number, rng: Rng = Math.random) {
     this.width = width
@@ -128,6 +131,7 @@ export class World {
   }
 
   clear() {
+    this.imageEffect = null
     this.type.fill(0)
     this.life.fill(0)
     this.color.fill(0)

@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ChangeEvent, CSSProperties, DragEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { effectProfile, LIGHT_DEVICE_QUERY, type EffectQuality } from './device-performance.ts'
 import { SnapshotInbox } from './snapshot-inbox.ts'
+import { ImageLab } from './ImageLab.tsx'
+import { buildImageScene, IMAGE_PRESETS, type ImagePreset } from './image-presets.ts'
 import { MaterialIcon } from './MaterialIcon.tsx'
 import { fitWorld, localPoint } from './viewport.ts'
 import { MapPlayer } from './analysis.ts'
@@ -144,6 +146,10 @@ export function App() {
   const directorUndo = useRef<{ world: World; settings: Settings; image: typeof imageBounds.current } | null>(null)
   /** An uploaded picture waiting to be placed. */
   const [placing, setPlacing] = useState<ImageBitmap | null>(null)
+  const [imageLabOpen, setImageLabOpen] = useState(false)
+  const [labImage, setLabImage] = useState<ImageBitmap | null>(null)
+  const imageReady = useRef<World | null>(null)
+  const imageLabUndo = useRef<{ world: World; image: typeof imageBounds.current } | null>(null)
   const [imgMode, setImgMode] = useState<ImageMode>('statue')
   const [cutBg, setCutBg] = useState(true)
   const [cutFullBg, setCutFullBg] = useState(false)
@@ -184,11 +190,11 @@ export function App() {
   const world = useRef<World>(null!)
   const draw = useRef<(night?: number, glowEnabled?: boolean) => void>(() => {})
   const view = useRef<View>({ x: 0, y: 0, scale: 1 })
-  const controllerBlocked = directorOpen || !!clip || dragging
+  const controllerBlocked = directorOpen || imageLabOpen || !!clip || dragging
   const fewTools = starter && !allTools
   const visiblePads = fewTools ? PADS.filter(pad => STARTER_TOOLS.includes(pad.tool)) : PADS
-  const live = useRef({ tool, brush, secondTool, secondBrush, paused, settings, splash, armed, placing: !!placing, controllerBlocked, controllerPage, starter, visiblePads, profile })
-  live.current = { tool, brush, secondTool, secondBrush, paused, settings, splash, armed, placing: !!placing, controllerBlocked, controllerPage, starter, visiblePads, profile }
+  const live = useRef({ tool, brush, secondTool, secondBrush, paused, settings, splash, armed, placing: !!placing, controllerBlocked, controllerPage, starter, visiblePads, profile, imageLabOpen })
+  live.current = { tool, brush, secondTool, secondBrush, paused, settings, splash, armed, placing: !!placing, controllerBlocked, controllerPage, starter, visiblePads, profile, imageLabOpen }
   const stroke = useRef<(Stroke & { id: number }) | null>(null)
   const cursor = useRef<(Cursor & { controller?: number }) | null>(null)
 
@@ -276,6 +282,11 @@ export function App() {
     stroke.current = null
     if (live.current.settings.crowd && !next.ravers.length && online.current.role !== 'guest') spawnCrowd(next)
     world.current = next
+    if (next.imageEffect) {
+      const e = next.imageEffect
+      imageBounds.current = { world: next, x: e.x / next.width, y: e.y / next.height, w: e.width / next.width, h: e.height / next.height }
+    }
+    imageReady.current = next.imageEffect && !next.imageEffect.fired ? cloneWorld(next) : null
     hostSync.current.base = null
     hostSync.current.needKey = true
     draw.current = createRenderer(next, base.current!, glow.current!, bloom.current!)
@@ -286,7 +297,8 @@ export function App() {
 
   function triggerDrop(manual = true) {
     if (online.current.role === 'guest') { if (manual) online.current.send({ a: 'drop' }); return }
-    if (live.current.paused || live.current.controllerPage) return
+    if (live.current.paused || live.current.controllerPage || live.current.imageLabOpen) return
+    if (!manual && (world.current.imageEffect && !world.current.imageEffect.fired)) return
     if (!manual && performance.now() - lastManualDrop.current < 450) return
     const challenge = session.current
     if (challenge.finished) return
@@ -495,7 +507,7 @@ export function App() {
     const tick = (now: number) => {
       const w = world.current
       const { tool, brush, secondTool, secondBrush, settings, splash, armed, controllerPage } = live.current
-      const paused = live.current.paused || !!controllerPage
+      const paused = live.current.paused || !!controllerPage || live.current.imageLabOpen
       const guest = online.current.role === 'guest'
       const dt = Math.min(100, now - prev) / 1000
       acc += dt * 1000
@@ -671,6 +683,7 @@ export function App() {
 
   const cutImageBackground = fillScreen ? cutFullBg : cutBg
   useEffect(() => () => placing?.close(), [placing])
+  useEffect(() => () => labImage?.close(), [labImage])
 
   /** Rebuild the placement preview whenever the picture, size or background option changes. */
   useLayoutEffect(() => {
@@ -723,14 +736,21 @@ export function App() {
     if (session.current.active && challenge.current) { say('Return to Sandbox to add an image.'); return }
     if (!file.type.startsWith('image/')) { say('That is not an image.'); return }
     try {
-      const bitmap = await createImageBitmap(file)
+      let bitmap = await createImageBitmap(file)
+      // Keep the reusable source compact on phones; simulation previews are smaller still.
+      if (Math.max(bitmap.width, bitmap.height) > 1600) {
+        const original = bitmap, scale = 1600 / Math.max(original.width, original.height)
+        try { bitmap = await createImageBitmap(original, { resizeWidth: Math.max(1, Math.round(original.width * scale)), resizeHeight: Math.max(1, Math.round(original.height * scale)), resizeQuality: 'high' }) }
+        finally { original.close() }
+      }
       if (session.current.active && challenge.current) { bitmap.close(); return }
       const w = world.current
       // start at a size that fits comfortably: under half the width and 70% of the height
       const width = Math.round(Math.min(w.width * .45, w.height * .7 * bitmap.width / bitmap.height))
       setImgWidth(Math.max(12, width))
       setFillScreen(false)
-      setPlacing(bitmap)
+      setLabImage(bitmap)
+      setImageLabOpen(true)
       setMixOpen(false)
       setMenu('none')
       setControllerPage(null)
@@ -738,6 +758,46 @@ export function App() {
     } catch {
       say('That image could not be opened.')
     }
+  }
+
+  function openImageLab() {
+    if (hostOnly()) return
+    if (session.current.active || session.current.finished) { say('Return to Sandbox to use Image Lab.'); return }
+    setImageLabOpen(true); setMixOpen(false); setMenu('none'); setControllerPage(null)
+  }
+
+  function createImageScene(preset: ImagePreset, pixels: Pixels) {
+    if (hostOnly()) return
+    if (session.current.active || session.current.finished) { say('Return to Sandbox to build an image scene.'); return }
+    const current = world.current
+    const next = buildImageScene(current.width, current.height, preset, pixels)
+    imageLabUndo.current = { world: cloneWorld(current), image: imageBounds.current }
+    install(next)
+    setImageLabOpen(false); setPlacing(null); setSplash(false); setPaused(false)
+    if (live.current.starter) finishGuide()
+    say(`${IMAGE_PRESETS.find(p => p.id === preset)!.name} ready. Press DROP to release your image.`)
+  }
+
+  async function stampLabImage(pixels: Pixels) {
+    const bitmap = labImage ? await createImageBitmap(labImage) : await createImageBitmap(new ImageData(new Uint8ClampedArray(pixels.data), pixels.width, pixels.height))
+    const w = world.current
+    setImgWidth(Math.max(12, Math.round(Math.min(w.width * .45, w.height * .7 * bitmap.width / bitmap.height))))
+    setFillScreen(false); setPlacing(bitmap); setImageLabOpen(false); setSplash(false)
+  }
+
+  function resetImageScene() {
+    if (!imageReady.current || hostOnly()) return
+    install(cloneWorld(imageReady.current)); setImageLabOpen(false)
+    say('Image scene reset. Press DROP when you are ready.')
+  }
+
+  function undoImageScene() {
+    const previous = imageLabUndo.current
+    if (!previous || hostOnly()) return
+    install(previous.world)
+    imageBounds.current = previous.image?.world ? { ...previous.image, world: previous.world } : null
+    imageLabUndo.current = null; setImageLabOpen(false)
+    say('Previous world restored.')
   }
 
   function placeImage() {
@@ -777,6 +837,7 @@ export function App() {
   // Keyboard
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (live.current.imageLabOpen) return
       if (live.current.controllerPage || e.metaKey || e.ctrlKey || e.altKey) return
       if ((e.target as HTMLElement)?.closest?.('input, textarea, select, [contenteditable]')) return
       const key = e.key.toLowerCase()
@@ -796,7 +857,7 @@ export function App() {
         else if (key === 'enter' && !(e.target instanceof HTMLElement && e.target.closest('button'))) placeLatest.current()
         return
       }
-      if (key === 'i') { if (!hostOnly()) imagePicker.current?.click(); return }
+      if (key === 'i') { openImageLab(); return }
       const pad = PADS.find(p => p.key.toLowerCase() === key)
       if (pad) setTool(pad.tool)
       else if (key === '[' || key === '-') setBrush(b => Math.max(1, b - 1))
@@ -804,7 +865,7 @@ export function App() {
       else if (key === ' ') { e.preventDefault(); setPaused(p => !p) }
       else if (key === 'd') triggerDrop()
       else if (key === 'u' && !e.repeat) retryDrop()
-      else if (key === 'r') loadScene(world.current.scene)
+      else if (key === 'r') { if (imageReady.current) resetImageScene(); else loadScene(world.current.scene) }
       else if (key === 'f') toggleFullscreen()
       else if (key === 'n') setSettings(s => ({ ...s, night: !s.night }))
       else if (key === 'escape') { setMixOpen(false); setMenu('none') }
@@ -958,7 +1019,8 @@ export function App() {
         guestView.current.haveKey = false
         remoteStrokes.current.clear()
         if (session.current.active || session.current.finished) leaveRave()
-        setDirectorOpen(false); setPlacing(null)
+        setDirectorOpen(false); setPlacing(null); setImageLabOpen(false)
+        world.current.imageEffect = null; imageReady.current = null; imageLabUndo.current = null
         say(`Joined rave ${code}. Waiting for the host's world…`)
       } else {
         hostSync.current.needKey = true
@@ -1320,11 +1382,12 @@ export function App() {
             if (hostOnly()) return
             setDirectorOpen(o => !o); setMixOpen(false); setMenu('none')
           }}>Director</button>}
+          {!starter && <button className="chip image-lab-trigger" onClick={openImageLab}>Image Lab</button>}
           <div className="chips">
             <div className="menu-wrap">
               <button className={`chip scene-btn ${menu === 'scenes' ? 'on' : ''}`} aria-expanded={menu === 'scenes'}
                 onClick={() => setMenu(m => m === 'scenes' ? 'none' : 'scenes')}>
-                <span className="world-label">Worlds</span><span className="world-current">{scene === 'song' ? 'Song World' : SCENES.find(x => x.id === scene)?.name}</span><span aria-hidden>⌄</span>
+                <span className="world-label">Worlds</span><span className="world-current">{world.current?.imageEffect ? IMAGE_PRESETS.find(p => p.id === world.current.imageEffect!.preset)?.name : scene === 'song' ? 'Song World' : SCENES.find(x => x.id === scene)?.name}</span><span aria-hidden>⌄</span>
               </button>
               {menu === 'scenes' && (
                 <div className="menu" role="menu" aria-label="Worlds"><div className="panel-heading">Worlds<button aria-label="Close worlds" onClick={() => setMenu('none')}>×</button></div>
@@ -1396,11 +1459,11 @@ export function App() {
       </header>
       <section className="deck hud" aria-label="Audio and transport">
         <div className="transport">        <button className="tool" title={paused ? 'Resume (Space)' : 'Freeze (Space)'} onClick={() => setPaused(p => !p)}>{paused ? '▶' : '❚❚'}</button>
-        <button className="tool" title="Reset scene (R)" onClick={() => loadScene(scene)}>↺</button>
-        <button hidden={starter} className={`tool ${placing ? 'on' : ''}`} title="Drop an image into the world (I). You can also drag one in or paste it." onClick={() => imagePicker.current?.click()}>
+        <button className="tool" title="Reset scene (R)" onClick={() => { if (imageReady.current) resetImageScene(); else loadScene(scene) }}>↺</button>
+        <button className={`tool image-lab-shortcut ${placing ? 'on' : ''}`} title="Image Lab (I): photo presets or stamp an image into your world" onClick={openImageLab}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="2" /><path d="m21 17-5-5-9 8" />
-          </svg>
+          </svg><span>Images</span>
         </button>
 </div>
         <div className="track-name" title={source === 'file' ? audio.fileName : undefined}><small>AUDIO IN</small><strong>{source === 'file' ? audio.fileName : source === 'demo' ? 'DEMO LOOP' : source === 'tab' ? 'TAB AUDIO' : source === 'mic' ? 'MICROPHONE' : 'SELECT A SOURCE'}</strong></div>
@@ -1625,7 +1688,7 @@ export function App() {
       )}
       {directorOpen && !splash && <Director getWorld={() => world.current} context={directorContext} apply={applyDirector}
         undo={undoDirector} canUndo={canDirectorUndo && !rave.active && !rave.finished} close={() => setDirectorOpen(false)} />}
-      {activePad && !splash && <footer className="status-line"><span><b>{activePad.name}</b><i>/</i>{activePad.hint}</span><span className="keyboard-hints"><kbd>SPACE</kbd> Pause <kbd>R</kbd> Reset <kbd>I</kbd> Image</span></footer>}
+      {activePad && !splash && <footer className="status-line"><span><b>{world.current?.imageEffect && !world.current.imageEffect.fired ? 'IMAGE READY' : activePad.name}</b><i>/</i>{world.current?.imageEffect && !world.current.imageEffect.fired ? 'Press DROP to release your picture.' : activePad.hint}</span><span className="keyboard-hints"><kbd>SPACE</kbd> Pause <kbd>R</kbd> Reset <kbd>I</kbd> Image</span></footer>}
       {countdown !== null && <div className="countdown" key={countdown}>DROP IN <b>{countdown}</b></div>}
       {clip && (
         <div className="clip" role="dialog" aria-label="Your clip">
@@ -1647,6 +1710,10 @@ export function App() {
         const file = e.target.files?.[0]; e.target.value = ''
         if (file) void openImage(file)
       }} />
+      {imageLabOpen && <ImageLab image={labImage} width={world.current.width} height={world.current.height}
+        initialPreset={world.current.imageEffect?.preset ?? 'box'} canReset={!!imageReady.current} canUndo={!!imageLabUndo.current}
+        onChoose={() => imagePicker.current?.click()} onCreate={createImageScene} onStamp={pixels => { void stampLabImage(pixels).catch(error => say(describe(error))) }}
+        onReset={resetImageScene} onUndo={undoImageScene} onClose={() => setImageLabOpen(false)} />}
       {placing && (
         <section className="placer" aria-label="Place image">
           <div className="placer-title">
