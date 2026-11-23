@@ -57,6 +57,12 @@ export class Online {
   private ws: WebSocket | null = null
   private handlers: Partial<OnlineEvents> = {}
   private closing = false
+  private heartbeat: ReturnType<typeof setInterval> | null = null
+
+  private stopHeartbeat() {
+    if (this.heartbeat !== null) clearInterval(this.heartbeat)
+    this.heartbeat = null
+  }
 
   on<K extends keyof OnlineEvents>(event: K, handler: OnlineEvents[K]) { this.handlers[event] = handler; return this }
 
@@ -74,6 +80,7 @@ export class Online {
       this.ws = ws
       const fail = (reason: string) => {
         if (this.ws !== ws) return
+        this.stopHeartbeat()
         if (!settled) { settled = true; reject(new Error(reason)) }
         else if (!this.closing) this.handlers.closed?.(reason)
         this.role = null
@@ -88,6 +95,12 @@ export class Online {
         try { message = JSON.parse(String(event.data)) } catch { return }
         if (message.t === 'room') {
           this.role = role; this.code = String(message.code); this.you = Number(message.you); this.players = message.players as Player[]
+          this.stopHeartbeat()
+          // The relay expires idle peers after 90 seconds, including solo hosts
+          // waiting for friends and guests watching without sending actions.
+          this.heartbeat = setInterval(() => {
+            if (this.ws === ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'keepalive' }))
+          }, 25_000)
           settled = true
           this.handlers.room?.(this.code, this.you, this.players, role)
           resolve()
@@ -98,6 +111,7 @@ export class Online {
           this.players = message.players as Player[]
           this.handlers.players?.(this.players)
         } else if (message.t === 'closed') {
+          this.stopHeartbeat()
           this.closing = true
           this.role = null
           this.ws = null
@@ -124,6 +138,7 @@ export class Online {
   }
 
   leave() {
+    this.stopHeartbeat()
     this.closing = true
     this.role = null
     this.players = []
