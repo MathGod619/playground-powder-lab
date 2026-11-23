@@ -22,6 +22,7 @@ export function createRenderer(world: World, base: HTMLCanvasElement, glow: HTML
   const ctx = base.getContext('2d')!, gctx = glow.getContext('2d')!, bctx = bloom.getContext('2d')!
   const image = ctx.createImageData(W, H), pix = new Uint32Array(image.data.buffer)
   const glowImage = gctx.createImageData(W, H), gpix = new Uint32Array(glowImage.data.buffer)
+  const plantColors = new Uint32Array(W)
 
   /**
    * `night` (0–1) darkens everything that does not glow and tints it moonlight blue, so only lava, fire,
@@ -30,6 +31,7 @@ export function createRenderer(world: World, base: HTMLCanvasElement, glow: HTML
   return function draw(night = 0) {
     const { type, color, life, pulse } = world
     gpix.fill(0)
+    plantColors.fill(0)
     const twinkle = pulse.twinkle > .05, speaker = pulse.speaker
     const speakerColor = hsl(world.hue, 100, 50 + world.energy.bass * 25), surf = hsl(195 + Math.sin(world.frame * .03) * world.energy.mid * 30, 100, 60 + pulse.kick * 15 + world.energy.mid * 15)
     const frameHash = Math.imul(world.frame, 2654435761)
@@ -50,7 +52,13 @@ export function createRenderer(world: World, base: HTMLCanvasElement, glow: HTML
           else if (speaker > .05 && ((i % W + (i / W | 0)) & 1) === 0) gpix[i] = half(speakerColor)
           break
         case M.Water: if (i >= W && type[i - W] === M.Empty) { c = surf; gpix[i] = half(half(c)) } break
-        case M.Plant: if (life[i] > 0) { c = hsl(115 + Math.sin(world.frame * .025 + i % W * .05) * world.energy.mid * 30, 90, 45 + world.energy.level * 25); gpix[i] = half(c) } break
+        case M.Plant: if (life[i] > 0) {
+          // Animation depends on the column, not the row. Calculate it once per
+          // occupied column, even when a large brush fills the screen with seeds.
+          const x = i % W
+          c = plantColors[x] || (plantColors[x] = hsl(115 + Math.sin(world.frame * .025 + x * .05) * world.energy.mid * 30, 90, 45 + world.energy.level * 25))
+          gpix[i] = half(c)
+        } break
         case M.Brick: if (life[i] === 1) gpix[i] = half(c); break
         case M.Bomb: {
           const fuse = life[i], urgent = fuse > 0 && fuse <= 3

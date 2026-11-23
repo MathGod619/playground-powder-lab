@@ -234,6 +234,7 @@ export class World {
 
   private updateParticles() {
     const { width: W, height: H, type, rules } = this
+    const wind = (Math.sin(this.frame * .012) * this.energy.mid * .012 + this.directorWind * .02) * this.continuousReactions.slosh
     for (let k = 0; k < this.particles; k++) {
       const spark = this.pType[k] === M.Spark
       const cx = this.px[k] | 0, cy = this.py[k] | 0
@@ -244,7 +245,7 @@ export class World {
       } else {
         this.vy[k] += .13 * rules.gravity * (this.scene === 'moon' ? 1 - this.energy.bass * .7 : 1) * (wet ? .3 : 1); this.vx[k] *= .996
       }
-      this.vx[k] += (Math.sin(this.frame * .012) * this.energy.mid * .012 + this.directorWind * .02) * this.continuousReactions.slosh
+      this.vx[k] += wind
       if (wet) { this.vx[k] *= .9; this.vy[k] *= .9 }
       const ghost = this.pGhost[k] > 0
       if (ghost) this.pGhost[k]--
@@ -308,6 +309,17 @@ export class World {
   }
 
   private flow(i: number, x: number, y: number, density: number, spread: number) {
+    // The interior of a full pool cannot move. Keep the original random draws so this
+    // shortcut changes neither later cells' choices nor seeded replays. Recheck every
+    // tick: opening a drain or adding a heavier material must wake it immediately.
+    const t = this.type, W = this.width, material = t[i]
+    if (x > 0 && x < W - 1 && y < this.height - 1 &&
+      t[i + W] === material && t[i + W - 1] === material && t[i + W + 1] === material &&
+      t[i - 1] === material && t[i + 1] === material) {
+      this.rng() // fall's diagonal direction
+      if (!(this.rng() < this.slosh)) this.rng() // flow's direction (short-circuiting)
+      return
+    }
     if (this.fall(i, x, y, density)) return
     let dir: number = this.rng() < this.slosh ? this.sloshDirection : (this.rng() < .5 ? -1 : 1)
     for (let pass = 0; pass < 2; pass++, dir = -dir) {

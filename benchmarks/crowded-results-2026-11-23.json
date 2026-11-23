@@ -1,0 +1,326 @@
+[
+  {
+    "path": "baseline-75f37e5",
+    "name": "sea",
+    "sample": 0,
+    "physics": 10.713964783333351,
+    "rendering": 3.211049294444489,
+    "reactions": 0.2962861055555499,
+    "total": 14.221300183333389
+  },
+  {
+    "path": "candidate",
+    "name": "sea",
+    "sample": 0,
+    "physics": 8.347525244444418,
+    "rendering": 2.4673444888889056,
+    "reactions": 0.32408287777779304,
+    "total": 11.138952611111115
+  },
+  {
+    "path": "baseline-75f37e5",
+    "name": "sea",
+    "sample": 1,
+    "physics": 11.30359330555562,
+    "rendering": 2.655722005555516,
+    "reactions": 0.1779511555555675,
+    "total": 14.137266466666704
+  },
+  {
+    "path": "candidate",
+    "name": "sea",
+    "sample": 1,
+    "physics": 9.47138932222227,
+    "rendering": 2.398719916666576,
+    "reactions": 0.1987956166666461,
+    "total": 12.068904855555491
+  },
+  {
+    "path": "baseline-75f37e5",
+    "name": "sea",
+    "sample": 2,
+    "physics": 9.909529699999984,
+    "rendering": 2.461834933333416,
+    "reactions": 0.19387894999987718,
+    "total": 12.565243583333277
+  },
+  {
+    "path": "candidate",
+    "name": "sea",
+    "sample": 2,
+    "physics": 8.021731055555554,
+    "rendering": 2.3450042277777863,
+    "reactions": 0.1774187499998839,
+    "total": 10.544154033333225
+  },
+  {
+    "path": "baseline-75f37e5",
+    "name": "song",
+    "sample": 0,
+    "physics": 2.4109877333332608,
+    "rendering": 1.6982446611110087,
+    "reactions": 0.16988432777786025,
+    "total": 4.279116722222129
+  },
+  {
+    "path": "candidate",
+    "name": "song",
+    "sample": 0,
+    "physics": 3.3655365722222994,
+    "rendering": 1.7296339555553357,
+    "reactions": 0.17685043888898994,
+    "total": 5.272020966666625
+  },
+  {
+    "path": "baseline-75f37e5",
+    "name": "song",
+    "sample": 1,
+    "physics": 2.795999055555755,
+    "rendering": 1.6607669444444684,
+    "reactions": 0.36012504999990697,
+    "total": 4.81689105000013
+  },
+  {
+    "path": "candidate",
+    "name": "song",
+    "sample": 1,
+    "physics": 2.971002961111036,
+    "rendering": 1.6573081444442828,
+    "reactions": 0.15752588888889377,
+    "total": 4.785836994444212
+  },
+  {
+    "path": "baseline-75f37e5",
+    "name": "song",
+    "sample": 2,
+    "physics": 1.8475706111109806,
+    "rendering": 1.5675879666664818,
+    "reactions": 0.1342951500001315,
+    "total": 3.549453727777594
+  },
+  {
+    "path": "candidate",
+    "name": "song",
+    "sample": 2,
+    "physics": 1.8578025555556854,
+    "rendering": 1.583812272222369,
+    "reactions": 0.12253542777782261,
+    "total": 3.564150255555877
+  },
+  {
+    "path": "baseline-75f37e5",
+    "name": "city",
+    "sample": 0,
+    "physics": 3.6003942055555753,
+    "rendering": 2.8250944388888457,
+    "reactions": 0.24644766666652787,
+    "total": 6.671936311110949
+  },
+  {
+    "path": "candidate",
+    "name": "city",
+    "sample": 0,
+    "physics": 3.055609027777872,
+    "rendering": 2.323359294444324,
+    "reactions": 0.18842815555548845,
+    "total": 5.5673964777776845
+  },
+  {
+    "path": "baseline-75f37e5",
+    "name": "city",
+    "sample": 1,
+    "physics": 2.971754877778282,
+    "rendering": 2.3031414388885927,
+    "reactions": 0.18577542777758127,
+    "total": 5.460671744444456
+  },
+  {
+    "path": "candidate",
+    "name": "city",
+    "sample": 1,
+    "physics": 3.6667627499997857,
+    "rendering": 3.35095136666706,
+    "reactions": 0.11598472222206814,
+    "total": 7.133698838888914
+  },
+  {
+    "path": "baseline-75f37e5",
+    "name": "city",
+    "sample": 2,
+    "physics": 2.362848194444693,
+    "rendering": 1.9773833777776924,
+    "reactions": 0.11066018888878817,
+    "total": 4.450891761111174
+  },
+  {
+    "path": "candidate",
+    "name": "city",
+    "sample": 2,
+    "physics": 2.1354863499997414,
+    "rendering": 1.9384449055559445,
+    "reactions": 0.12362338333328403,
+    "total": 4.1975546388889695
+  },
+  {
+    "path": "baseline-75f37e5",
+    "name": "powders",
+    "sample": 0,
+    "physics": 5.400614822222229,
+    "rendering": 2.192929844444249,
+    "reactions": 0.10743771111156093,
+    "total": 7.700982377778039
+  },
+  {
+    "path": "candidate",
+    "name": "powders",
+    "sample": 0,
+    "physics": 5.419454633333185,
+    "rendering": 2.1568664666669064,
+    "reactions": 0.09750857777762575,
+    "total": 7.673829677777717
+  },
+  {
+    "path": "baseline-75f37e5",
+    "name": "powders",
+    "sample": 1,
+    "physics": 6.491839111111201,
+    "rendering": 2.8459393944441724,
+    "reactions": 0.13466478333357373,
+    "total": 9.472443288888947
+  },
+  {
+    "path": "candidate",
+    "name": "powders",
+    "sample": 1,
+    "physics": 5.458241838889363,
+    "rendering": 2.543192388888969,
+    "reactions": 0.18940416666640278,
+    "total": 8.190838394444736
+  },
+  {
+    "path": "baseline-75f37e5",
+    "name": "powders",
+    "sample": 2,
+    "physics": 6.197552188888746,
+    "rendering": 2.617747944444879,
+    "reactions": 0.12275052777780122,
+    "total": 8.938050661111427
+  },
+  {
+    "path": "candidate",
+    "name": "powders",
+    "sample": 2,
+    "physics": 5.793173866666782,
+    "rendering": 2.5858159444441196,
+    "reactions": 0.12402963333337944,
+    "total": 8.50301944444428
+  },
+  {
+    "path": "baseline-75f37e5",
+    "name": "plants",
+    "sample": 0,
+    "physics": 2.7956106611107923,
+    "rendering": 22.037746727778035,
+    "reactions": 0.018344877777862065,
+    "total": 24.85170226666669
+  },
+  {
+    "path": "candidate",
+    "name": "plants",
+    "sample": 0,
+    "physics": 1.7141516111110429,
+    "rendering": 3.8073058222224465,
+    "reactions": 0.015110261111193622,
+    "total": 5.536567694444683
+  },
+  {
+    "path": "baseline-75f37e5",
+    "name": "plants",
+    "sample": 1,
+    "physics": 2.3694694388889426,
+    "rendering": 22.823768983333178,
+    "reactions": 0.019648650000211394,
+    "total": 25.212887072222333
+  },
+  {
+    "path": "candidate",
+    "name": "plants",
+    "sample": 1,
+    "physics": 1.8994236222222551,
+    "rendering": 3.583234277777592,
+    "reactions": 0.019468522222329435,
+    "total": 5.502126422222177
+  },
+  {
+    "path": "baseline-75f37e5",
+    "name": "plants",
+    "sample": 2,
+    "physics": 1.8607437611110071,
+    "rendering": 17.3215402500003,
+    "reactions": 0.011196994445223632,
+    "total": 19.19348100555653
+  },
+  {
+    "path": "candidate",
+    "name": "plants",
+    "sample": 2,
+    "physics": 1.5144907555559055,
+    "rendering": 2.7526565111112076,
+    "reactions": 0.012231249999967986,
+    "total": 4.279378516667081
+  },
+  {
+    "path": "baseline-75f37e5",
+    "name": "particles",
+    "sample": 0,
+    "physics": 1.2388680499999383,
+    "rendering": 0.9362654944451707,
+    "reactions": 0.0869905111112328,
+    "total": 2.2621240555563418
+  },
+  {
+    "path": "candidate",
+    "name": "particles",
+    "sample": 0,
+    "physics": 0.8435745388885455,
+    "rendering": 0.9455333277774722,
+    "reactions": 0.11761152222259423,
+    "total": 1.906719388888612
+  },
+  {
+    "path": "baseline-75f37e5",
+    "name": "particles",
+    "sample": 1,
+    "physics": 1.4072074555554233,
+    "rendering": 1.0603490722217732,
+    "reactions": 0.09386619444412644,
+    "total": 2.561422722221323
+  },
+  {
+    "path": "candidate",
+    "name": "particles",
+    "sample": 1,
+    "physics": 0.9318965222217634,
+    "rendering": 1.3855532833329764,
+    "reactions": 0.2652256722220854,
+    "total": 2.5826754777768253
+  },
+  {
+    "path": "baseline-75f37e5",
+    "name": "particles",
+    "sample": 2,
+    "physics": 1.339049505556371,
+    "rendering": 1.01652891666664,
+    "reactions": 0.12003518333327115,
+    "total": 2.475613605556282
+  },
+  {
+    "path": "candidate",
+    "name": "particles",
+    "sample": 2,
+    "physics": 0.9129483666661448,
+    "rendering": 1.062870361111143,
+    "reactions": 0.10704819444557263,
+    "total": 2.0828669222228604
+  }
+]
