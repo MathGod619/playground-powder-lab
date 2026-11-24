@@ -5,7 +5,7 @@
 .image-lab h2 { margin: 0; font: italic 800 32px/1 var(--display); text-transform: uppercase }
 .image-lab h2 span { margin-left: 10px; color: var(--accent); letter-spacing: -.1em }
 .image-lab-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 2px }
-.image-lab-presets { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; border-bottom: 1px solid var(--line) }
+.image-lab-presets { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; border-bottom: 1px solid var(--line) }
 .image-preset { min-height: 44px; padding: 8px 4px 12px; text-align: center; font: 600 18px/1.1 var(--display); color: var(--dim); border-bottom: 2px solid transparent }
 .image-preset:hover { color: var(--ink) }
 .image-preset.selected { color: var(--ink); border-bottom-color: var(--accent) }
@@ -62,4 +62,11 @@
   .image-lab-options { margin-top: 6px }
   .image-lab-footer { padding-top: 8px }
   .lab-build { min-height: 40px; padding: 8px 16px; font-size: 21px }
+}
+
+.image-lab-mobile-effect { display: none }
+@media (max-width: 540px) {
+  .image-lab-presets { display: none }
+  .image-lab-mobile-effect { display: flex; align-items: center; gap: 12px; color: var(--dim); font-size: 14px }
+  .image-lab-mobile-effect select { flex: 1; min-width: 0; min-height: 44px; color: var(--ink); background: #24261f; border: 1px solid var(--line); padding-inline: 12px; font: 600 18px var(--display) }
 }

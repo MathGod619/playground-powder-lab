@@ -1,7 +1,7 @@
 import { HOPPER, M } from './materials.ts'
 import { attachScene, SCENE_IDS } from './scenes.ts'
 import { World, type SceneId } from './world.ts'
-import { restoreImageEffect } from './image-presets.ts'
+import { MAX_IMAGE_GRAINS, restoreImageEffect } from './image-presets.ts'
 
 export const SAVE_KEY = 'powder-rave-save-v1'
 export const MAX_FILE_BYTES = 16_000_000
@@ -25,7 +25,18 @@ function fromBase64(text: string) {
  */
 export function encodeWorld(world: World) {
   const type = world.type.slice(), life = world.life.slice(), color = world.color.slice()
+  const rewindGrains: number[][] = []
+  const tracking = world.rewind
+  if (tracking) {
+    for (let i = 0; i < world.size; i++) {
+      if (tracking.grid[i] && type[i] === M.Sand) rewindGrains.push([tracking.grid[i], i])
+    }
+  }
   for (let k = 0; k < world.particles; k++) {
+    if (tracking?.air[k] && world.pType[k] === M.Sand) {
+      rewindGrains.push([tracking.air[k], world.px[k], world.py[k], world.vx[k], world.vy[k], world.pColor[k], world.pGhost[k]])
+      continue
+    }
     const t = world.pType[k]
     if (t === M.Spark || !HOPPER[t]) continue
     const x = world.px[k] | 0, y = world.py[k] | 0
@@ -43,6 +54,7 @@ export function encodeWorld(world: World) {
     marks: world.marks,
     hue: world.hue,
     ...(world.imageEffect ? { imageEffect: world.imageEffect } : {}),
+    ...(tracking ? { rewindGrains } : {}),
     physics: { gravity: world.rules.gravity, fall: world.rules.fall, wind: world.directorWind,
       plantsInWater: world.rules.plantsInWater, throughWater: world.rules.throughWater },
     type: toBase64(type),
@@ -88,5 +100,28 @@ export function decodeWorld(json: string) {
     world.directorWind = p.wind
   }
   if (data.imageEffect !== undefined) restoreImageEffect(world, data.imageEffect)
+  if (world.rewind) {
+    const entries = data.rewindGrains
+    const track = world.rewind
+    const seen = new Set<number>()
+    if (!Array.isArray(entries) || entries.length > MAX_IMAGE_GRAINS) throw new Error('Invalid Rewind grains.')
+    for (const entry of entries) {
+      if (!Array.isArray(entry) || !entry.every(Number.isFinite)) throw new Error('Invalid Rewind grain.')
+      const [signedId, x, y, vx, vy, color, ghost] = entry
+      const id = Math.abs(signedId)
+      if (!Number.isInteger(id) || id < 1 || id >= track.locations.length || seen.has(id)) throw new Error('Invalid Rewind grain ID.')
+      seen.add(id)
+      if (entry.length === 2 && signedId > 0 && Number.isInteger(x) && world.type[x] === M.Sand && !track.grid[x]) {
+        track.grid[x] = id
+        track.locations[id] = x + 1
+      } else if (entry.length === 7 && x >= 0 && x < world.width && y >= -world.height * 4 && y < world.height &&
+          Math.abs(vx) <= 100 && Math.abs(vy) <= 100 && Number.isInteger(color) && color >= 0 && color <= 0xffffffff &&
+          Number.isInteger(ghost) && ghost >= 0 && ghost <= 255) {
+        world.addParticle(x, y, vx, vy, M.Sand, color, 0, ghost)
+        track.air[world.particles - 1] = signedId
+        track.locations[id] = -world.particles
+      } else throw new Error('Invalid Rewind grain position.')
+    }
+  }
   return world
 }

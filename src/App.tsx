@@ -3,7 +3,7 @@ import type { ChangeEvent, CSSProperties, DragEvent, PointerEvent as ReactPointe
 import { effectProfile, LIGHT_DEVICE_QUERY, type EffectQuality } from './device-performance.ts'
 import { SnapshotInbox } from './snapshot-inbox.ts'
 import { ImageLab } from './ImageLab.tsx'
-import { buildImageScene, IMAGE_PRESETS, type ImagePreset } from './image-presets.ts'
+import { buildImageScene, IMAGE_PRESETS, rewindStroke, type ImagePreset } from './image-presets.ts'
 import { MaterialIcon } from './MaterialIcon.tsx'
 import { fitWorld, localPoint } from './viewport.ts'
 import { MapPlayer } from './analysis.ts'
@@ -195,6 +195,7 @@ export function App() {
   const visiblePads = fewTools ? PADS.filter(pad => STARTER_TOOLS.includes(pad.tool)) : PADS
   const live = useRef({ tool, brush, secondTool, secondBrush, paused, settings, splash, armed, placing: !!placing, controllerBlocked, controllerPage, starter, visiblePads, profile, imageLabOpen })
   live.current = { tool, brush, secondTool, secondBrush, paused, settings, splash, armed, placing: !!placing, controllerBlocked, controllerPage, starter, visiblePads, profile, imageLabOpen }
+  const rewindPointer = useRef<{ id: number; last: Cell } | null>(null)
   const stroke = useRef<(Stroke & { id: number }) | null>(null)
   const cursor = useRef<(Cursor & { controller?: number }) | null>(null)
 
@@ -279,6 +280,8 @@ export function App() {
       dropCheckpoint.current = null
       setCanRetry(false)
     }
+    rewindPointer.current = null
+    if (next.rewind) next.rewind.holding = false
     stroke.current = null
     if (live.current.settings.crowd && !next.ravers.length && online.current.role !== 'guest') spawnCrowd(next)
     world.current = next
@@ -322,7 +325,9 @@ export function App() {
       recorder.start(8, audio.recordStream()); setArmed(false)
     }
     if (recorder.active && catching.current) { recorder.endIn(6); catching.current = false }
+    const newRewind = world.current.rewind && !world.current.imageEffect?.fired
     world.current.drop(false)
+    if (newRewind) say('Swipe inside the outline to pull the picture back together.')
     if (challenge.active) challenge.applyDropEffects()
     if (live.current.settings.dropRumble && document.hasFocus()) for (const controller of controllers) void controller.rumbleDrop()
     const el = layer.current
@@ -1020,7 +1025,7 @@ export function App() {
         remoteStrokes.current.clear()
         if (session.current.active || session.current.finished) leaveRave()
         setDirectorOpen(false); setPlacing(null); setImageLabOpen(false)
-        world.current.imageEffect = null; imageReady.current = null; imageLabUndo.current = null
+        world.current.imageEffect = null; world.current.rewind = null; rewindPointer.current = null; imageReady.current = null; imageLabUndo.current = null
         say(`Joined rave ${code}. Waiting for the host's world…`)
       } else {
         hostSync.current.needKey = true
@@ -1296,12 +1301,25 @@ export function App() {
       return
     }
     const cell = toCell(cursor.current.sx, cursor.current.sy), erase = e.button === 2
+    const photo = world.current.imageEffect
+    if (!erase && !rewindPointer.current && world.current.rewind && photo?.fired &&
+        cell.x >= photo.x && cell.x < photo.x + photo.width && cell.y >= photo.y && cell.y < photo.y + photo.height) {
+      rewindPointer.current = { id: e.pointerId, last: cell }
+      rewindStroke(world.current, cell, cell, Math.max(brush, 4))
+      return
+    }
     if (erase || !isClickTool(tool)) stroke.current = { id: e.pointerId, erase, last: cell }
     paintAt(cell, erase)
   }
 
   function onPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
     cursor.current = localPoint(e.clientX, e.clientY, stage.current!.getBoundingClientRect())
+    if (rewindPointer.current?.id === e.pointerId) {
+      const cell = toCell(cursor.current.sx, cursor.current.sy)
+      rewindStroke(world.current, rewindPointer.current.last, cell, Math.max(brush, 4))
+      rewindPointer.current.last = cell
+      return
+    }
     const s = stroke.current
     if (!s || s.id !== e.pointerId) return
     const cell = toCell(cursor.current.sx, cursor.current.sy)
@@ -1310,6 +1328,10 @@ export function App() {
   }
 
   function endStroke(e: ReactPointerEvent<HTMLDivElement>) {
+    if (rewindPointer.current?.id === e.pointerId) {
+      rewindPointer.current = null
+      if (world.current.rewind) world.current.rewind.holding = false
+    }
     if (online.current.role === 'guest' && stroke.current?.id === e.pointerId) online.current.send({ a: 'up' })
     if (stroke.current?.id === e.pointerId) stroke.current = null
     if (e.pointerType !== 'mouse') cursor.current = null
@@ -1361,7 +1383,7 @@ export function App() {
 <div className={`app ${profile.light ? 'light-render' : ''}`} onDragOver={e => { e.preventDefault(); setDragging(true) }}
       onDragLeave={e => { if (!e.relatedTarget) setDragging(false) }} onDrop={onDrop}>
       <div ref={stage} className="stage" onPointerDown={onPointerDown} onPointerMove={onPointerMove}
-        onPointerUp={endStroke} onPointerCancel={endStroke}
+        onPointerUp={endStroke} onPointerCancel={endStroke} onLostPointerCapture={endStroke}
         onPointerLeave={e => { if (!stroke.current && cursor.current?.controller === undefined && e.pointerType === 'mouse') cursor.current = null }}
         onContextMenu={e => e.preventDefault()}
         onWheel={e => placing ? resizeImage(e.deltaY < 0 ? 4 : -4) : setBrush(b => Math.max(1, Math.min(MAX_BRUSH, b + (e.deltaY < 0 ? 1 : -1))))}>
@@ -1687,7 +1709,7 @@ export function App() {
       )}
       {directorOpen && !splash && <Director getWorld={() => world.current} context={directorContext} apply={applyDirector}
         undo={undoDirector} canUndo={canDirectorUndo && !rave.active && !rave.finished} close={() => setDirectorOpen(false)} />}
-      {activePad && !splash && <footer className="status-line"><span><b>{world.current?.imageEffect && !world.current.imageEffect.fired ? 'IMAGE READY' : activePad.name}</b><i>/</i>{world.current?.imageEffect && !world.current.imageEffect.fired ? 'Press DROP to release your picture.' : activePad.hint}</span><span className="keyboard-hints"><kbd>SPACE</kbd> Pause <kbd>R</kbd> Reset <kbd>I</kbd> Image</span></footer>}
+      {activePad && !splash && <footer className="status-line"><span><b>{world.current?.imageEffect && !world.current.imageEffect.fired ? 'IMAGE READY' : activePad.name}</b><i>/</i>{world.current?.imageEffect && !world.current.imageEffect.fired ? 'Press DROP to release your picture.' : world.current?.rewind ? 'Swipe the outline to rewind the sand.' : activePad.hint}</span><span className="keyboard-hints"><kbd>SPACE</kbd> Pause <kbd>R</kbd> Reset <kbd>I</kbd> Image</span></footer>}
       {countdown !== null && <div className="countdown" key={countdown}>DROP IN <b>{countdown}</b></div>}
       {clip && (
         <div className="clip" role="dialog" aria-label="Your clip">
@@ -1710,7 +1732,7 @@ export function App() {
         if (file) void openImage(file)
       }} />
       {imageLabOpen && <ImageLab image={labImage} width={world.current.width} height={world.current.height}
-        initialPreset={world.current.imageEffect?.preset ?? 'box'} canReset={!!imageReady.current} canUndo={!!imageLabUndo.current}
+        initialPreset={world.current.imageEffect?.preset ?? 'rewind'} canReset={!!imageReady.current} canUndo={!!imageLabUndo.current}
         onChoose={() => imagePicker.current?.click()} onCreate={createImageScene} onStamp={pixels => { void stampLabImage(pixels).catch(error => say(describe(error))) }}
         onReset={resetImageScene} onUndo={undoImageScene} onClose={() => setImageLabOpen(false)} />}
       {placing && (

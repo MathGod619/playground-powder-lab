@@ -94,6 +94,16 @@ export class World {
   /** Optional Image Lab scene metadata; the core simulation still uses ordinary cells. */
   imageEffect: ImageEffect | null = null
 
+  // Allocated only in a Rewind scene. IDs are one plus the photo pixel's index in cells.
+  rewind: { grid: Uint16Array; air: Int16Array; locations: Int32Array; holding: boolean } | null = null
+
+  enableRewind() {
+    this.rewind = {
+      grid: new Uint16Array(this.size), air: new Int16Array(MAX_PARTICLES),
+      locations: new Int32Array((this.imageEffect?.cells.length ?? 0) + 1), holding: false,
+    }
+  }
+
   constructor(width: number, height: number, rng: Rng = Math.random) {
     this.width = width
     this.height = height
@@ -132,6 +142,7 @@ export class World {
 
   clear() {
     this.imageEffect = null
+    this.rewind = null
     this.type.fill(0)
     this.life.fill(0)
     this.color.fill(0)
@@ -146,6 +157,7 @@ export class World {
 
   put(i: number, material: number, hue = this.hue) {
     const r = this.rng
+    if (this.rewind) this.rewind.grid[i] = 0
     this.type[i] = material
     this.color[i] = colorFor(material, hue, r)
     this.life[i] =
@@ -169,14 +181,23 @@ export class World {
     if (k >= MAX_PARTICLES) return false
     this.px[k] = x; this.py[k] = y; this.vx[k] = vx; this.vy[k] = vy
     this.pType[k] = type; this.pColor[k] = color; this.pLife[k] = life; this.pGhost[k] = ghost
+    if (this.rewind) this.rewind.air[k] = 0
     this.particles++
     return true
   }
 
   /** Lifts a cell out of the grid and throws it. */
   launch(i: number, vx: number, vy: number, ghost = 0) {
+    const rewind = this.rewind
+    if (rewind?.holding && rewind.grid[i] && this.life[i] === HELD_SAND && this.type[i] === M.Sand) return
     const life = this.type[i] === M.Sand ? 0 : this.life[i]
     if (this.addParticle(i % this.width + .5, (i / this.width | 0) + .5, vx, vy, this.type[i], this.color[i], life, ghost)) {
+      if (rewind && rewind.grid[i]) {
+        const id = rewind.grid[i]
+        rewind.air[this.particles - 1] = id
+        rewind.locations[id] = -this.particles
+        rewind.grid[i] = 0
+      }
       this.type[i] = M.Empty
       this.life[i] = 0
     }
@@ -184,6 +205,12 @@ export class World {
 
   private kill(k: number) {
     const n = --this.particles
+    if (this.rewind) {
+      const moved = this.rewind.air[n]
+      if (k !== n && moved) this.rewind.locations[Math.abs(moved)] = -(k + 1)
+      this.rewind.air[k] = moved
+      this.rewind.air[n] = 0
+    }
     this.px[k] = this.px[n]; this.py[k] = this.py[n]; this.vx[k] = this.vx[n]; this.vy[k] = this.vy[n]
     this.pType[k] = this.pType[n]; this.pColor[k] = this.pColor[n]; this.pLife[k] = this.pLife[n]; this.pGhost[k] = this.pGhost[n]
   }
@@ -220,6 +247,11 @@ export class World {
   }
 
   private fill(j: number, k: number) {
+    if (this.rewind) {
+      const id = Math.abs(this.rewind.air[k])
+      this.rewind.grid[j] = id
+      if (id) this.rewind.locations[id] = j + 1
+    }
     this.type[j] = this.pType[k]; this.color[j] = this.pColor[k]; this.life[j] = this.pLife[k]
     this.stamp[j] = this.cur
   }
@@ -240,6 +272,24 @@ export class World {
     const { width: W, height: H, type, rules } = this
     const wind = (Math.sin(this.frame * .012) * this.energy.mid * .012 + this.directorWind * .02) * this.continuousReactions.slosh
     for (let k = 0; k < this.particles; k++) {
+      // A negative airborne ID is a grain flying back to its own sampled pixel.
+      if (this.rewind && this.rewind.air[k] < 0) {
+        const home = this.imageEffect!.cells[-this.rewind.air[k] - 1]
+        const dx = home % W + .5 - this.px[k], dy = Math.floor(home / W) + .5 - this.py[k]
+        if (Math.abs(dx) + Math.abs(dy) > .6) {
+          this.px[k] += dx * .17
+          this.py[k] += dy * .17
+          continue
+        }
+        if (type[home] === M.Empty) {
+          this.fill(home, k)
+          this.life[home] = HELD_SAND
+          this.kill(k--)
+          continue
+        }
+        // A user may have placed a wall here. Let the grain fall again.
+        this.rewind.air[k] *= -1
+      }
       const spark = this.pType[k] === M.Spark
       const cx = this.px[k] | 0, cy = this.py[k] | 0
       const wet = rules.throughWater && cx >= 0 && cx < W && cy >= 0 && cy < H && type[cy * W + cx] === M.Water
@@ -291,6 +341,13 @@ export class World {
 
   private swap(i: number, j: number) {
     const { type, color, life } = this
+    if (this.rewind) {
+      const { grid, locations } = this.rewind
+      const first = grid[i], second = grid[j]
+      grid[i] = second; grid[j] = first
+      if (first) locations[first] = j + 1
+      if (second) locations[second] = i + 1
+    }
     const a = type[i], b = color[i], d = life[i]
     type[i] = type[j]; color[i] = color[j]; life[i] = life[j]
     type[j] = a; color[j] = b; life[j] = d
@@ -755,7 +812,7 @@ export class World {
   /** Lets go of sand pictures that were holding their shape. Returns how many cells were released. */
   release() {
     let n = 0
-    for (let i = 0; i < this.size; i++) if (this.type[i] === M.Sand && this.life[i] === HELD_SAND) { this.life[i] = 0; n++ }
+    for (let i = 0; i < this.size; i++) if (this.type[i] === M.Sand && this.life[i] === HELD_SAND && !(this.rewind?.holding && this.rewind.grid[i])) { this.life[i] = 0; n++ }
     return n
   }
 
@@ -836,7 +893,7 @@ export class World {
         const x = cx + dx, y = cy + dy
         if (x < 0 || x >= this.width || y < 0 || y >= this.height) continue
         const i = y * this.width + x
-        if (erase || tool === ERASE) { this.type[i] = M.Empty; this.life[i] = 0; continue }
+        if (erase || tool === ERASE) { if (this.rewind) this.rewind.grid[i] = 0; this.type[i] = M.Empty; this.life[i] = 0; continue }
         const chance = tool === M.Rocket && radius <= 2 ? .25 : density
         if (r() > chance) continue
         if (this.type[i] === M.Empty || (OVERWRITES[tool] && HOPPER[this.type[i]])) this.put(i, tool)

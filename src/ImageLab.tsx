@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { PointerEvent } from 'react'
 import { removeBackground, type Pixels } from './image.ts'
-import { buildImageScene, demoImage, fitPresetPhoto, IMAGE_PRESETS, imageRegion, resizePixels, type ImagePreset } from './image-presets.ts'
+import { buildImageScene, demoImage, fitPresetPhoto, IMAGE_PRESETS, imageRegion, resizePixels, rewindStroke, type ImagePreset } from './image-presets.ts'
 import { M } from './materials.ts'
 import type { World } from './world.ts'
 
@@ -40,11 +41,22 @@ function paintPreview(canvas: HTMLCanvasElement, world: World) {
     if (x >= 0 && x < world.width && y >= 0 && y < world.height) colors[y * world.width + x] = world.pColor[k]
   }
   ctx.putImageData(pixels, 0, 0)
+  const photo = world.imageEffect
+  if (world.rewind && photo?.fired) {
+    ctx.save()
+    ctx.strokeStyle = '#d1c5a0aa'
+    ctx.setLineDash([2, 2])
+    ctx.strokeRect(photo.x - .5, photo.y - .5, photo.width + 1, photo.height + 1)
+    ctx.restore()
+  }
 }
 
 export function ImageLab(props: Props) {
   const dialog = useRef<HTMLDialogElement>(null), canvas = useRef<HTMLCanvasElement>(null)
   const animation = useRef(0)
+  const previewWorld = useRef<World | null>(null)
+  const gesture = useRef<{ id: number; x: number; y: number } | null>(null)
+  const triedRewind = useRef(false)
   const [preset, setPreset] = useState(props.initialPreset)
   const [demo, setDemo] = useState(false), [cut, setCut] = useState(false), [playing, setPlaying] = useState(false)
   const [error, setError] = useState('')
@@ -65,6 +77,8 @@ export function ImageLab(props: Props) {
     photoFor(source ?? demoPixels, preset, width, height, source ? cut : false))
 
   useEffect(() => {
+    previewWorld.current = null
+    gesture.current = null
     cancelAnimationFrame(animation.current); setPlaying(false); setError('')
     try {
       const world = prepare()
@@ -81,22 +95,55 @@ export function ImageLab(props: Props) {
       cancelAnimationFrame(animation.current)
       const world = prepare()
       world.drop()
+      previewWorld.current = world
+      gesture.current = null
+      triedRewind.current = false
       setPlaying(true); setError('')
       let ticks = 0, last = -Infinity
       const frame = (now: number) => {
         if (now - last >= 32) {
           last = now
           for (let k = 0; k < 2; k++) {
+            const photo = world.imageEffect!
+            const demoTick = ticks % 240
+            if (world.rewind && !triedRewind.current && demoTick >= 90 && demoTick < 150) {
+              const x = photo.x + (demoTick - 90) / 60 * photo.width, y = photo.y + photo.height * .48
+              rewindStroke(world, { x: x - photo.width / 60, y }, { x, y }, Math.max(4, photo.height * .16))
+            }
+            if (world.rewind && !triedRewind.current && demoTick === 170) world.rewind.holding = false
             if (ticks % 30 === 0) world.onKick(.7)
             world.step(); world.decay(); ticks++
           }
           paintPreview(canvas.current!, world)
         }
-        if (ticks < 360) animation.current = requestAnimationFrame(frame)
+        if (world.rewind || ticks < 360) animation.current = requestAnimationFrame(frame)
         else setPlaying(false)
       }
       animation.current = requestAnimationFrame(frame)
     } catch (error) { setError(error instanceof Error ? error.message : 'Could not preview this image.') }
+  }
+
+  function swipePreview(event: PointerEvent<HTMLCanvasElement>) {
+    const world = previewWorld.current
+    if (!world?.rewind || !world.imageEffect?.fired) return
+    const start = event.type === 'pointerdown'
+    if (start ? event.button !== 0 || gesture.current !== null : gesture.current?.id !== event.pointerId) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    const scale = Math.min(rect.width / world.width, rect.height / world.height)
+    const point = {
+      x: (event.clientX - rect.left - (rect.width - world.width * scale) / 2) / scale,
+      y: (event.clientY - rect.top - (rect.height - world.height * scale) / 2) / scale,
+    }
+    if (start) event.currentTarget.setPointerCapture(event.pointerId)
+    triedRewind.current = true
+    rewindStroke(world, gesture.current ?? point, point, Math.max(4, world.imageEffect.height * .12))
+    gesture.current = { ...point, id: event.pointerId }
+  }
+
+  function endPreviewSwipe(event: PointerEvent<HTMLCanvasElement>) {
+    if (gesture.current?.id !== event.pointerId) return
+    gesture.current = null
+    if (previewWorld.current?.rewind) previewWorld.current.rewind.holding = false
   }
 
   function usePhoto(stamp = false) {
@@ -120,8 +167,15 @@ export function ImageLab(props: Props) {
           {item.name}
         </button>)}
       </div>
+      <label className="image-lab-mobile-effect">Effect
+        <select value={preset} onChange={e => setPreset(e.target.value as ImagePreset)}>
+          {IMAGE_PRESETS.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+        </select>
+      </label>
       <p className="image-lab-description">{info.detail}</p>
-      <div className="image-lab-preview"><canvas ref={canvas} role="img" aria-label={`${info.name} scene preview`} />
+      <div className="image-lab-preview"><canvas ref={canvas} role="img" style={{ touchAction: playing && preset === 'rewind' ? 'none' : 'auto' }}
+        onPointerDown={swipePreview} onPointerMove={swipePreview} onPointerUp={endPreviewSwipe}
+        onPointerCancel={endPreviewSwipe} onLostPointerCapture={endPreviewSwipe} aria-label={`${info.name} scene preview`} />
         {!source ? <div className="image-lab-empty">
           <b>Your picture, in motion.</b>
           <button className="chip on" onClick={props.onChoose}>Choose image</button>

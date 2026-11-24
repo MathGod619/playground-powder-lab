@@ -121,6 +121,15 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, world: World, view: V
   const s = view.scale * dpr, ox = view.x * dpr, oy = view.y * dpr
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+  const photo = world.imageEffect
+  if (world.rewind && photo?.fired) {
+    ctx.save()
+    ctx.strokeStyle = 'rgba(239, 229, 197, .55)'
+    ctx.lineWidth = dpr
+    ctx.setLineDash([4 * dpr, 5 * dpr])
+    ctx.strokeRect(ox + photo.x * s, oy + photo.y * s, photo.width * s, photo.height * s)
+    ctx.restore()
+  }
   for (let k = world.rings.length - 1; k >= 0; k--) {
     const ring = world.rings[k]
     ring.r += (ring.max - ring.r) * .12 + .6

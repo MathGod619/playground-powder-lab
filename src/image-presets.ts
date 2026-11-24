@@ -1,12 +1,13 @@
 import { pack } from './color.ts'
 import { stampImage, type Pixels } from './image.ts'
 import { M } from './materials.ts'
-import { World } from './world.ts'
+import { HELD_SAND, World } from './world.ts'
 
-export type ImagePreset = 'box' | 'sandfall' | 'split' | 'speakers' | 'fireworks'
+export type ImagePreset = 'rewind' | 'box' | 'sandfall' | 'split' | 'speakers' | 'fireworks'
 export type ImageEffect = { preset: ImagePreset; cells: number[]; fired: boolean; x: number; y: number; width: number; height: number }
 export const MAX_IMAGE_GRAINS = 9000
 export const IMAGE_PRESETS: { id: ImagePreset; name: string; tag: string; detail: string }[] = [
+  { id: 'rewind', name: 'Rewind', tag: 'REWIND', detail: 'Drop the photo. Swipe its outline to pull the grains home. Lift your finger and the next kick shakes them loose.' },
   { id: 'box', name: 'Sand Box', tag: 'BURST + CATCH', detail: 'Your picture bursts into colored sand inside a solid box. Keep mixing it with the beat.' },
   { id: 'sandfall', name: 'Sandfall', tag: 'POUR + LAYER', detail: 'The picture melts into a sand curtain, tumbles through staggered chutes, and builds colorful layers.' },
   { id: 'split', name: 'Split Drop', tag: 'SPLIT + SORT', detail: 'The two halves fly apart into twin collectors. Watch the colors separate and settle.' },
@@ -73,7 +74,7 @@ export function buildImageScene(width: number, height: number, preset: ImagePres
   // A continuous floor and side rails catch every grain, even in portrait layouts.
   rect(0, floor, width, height)
   rect(0, 0, thick, height); rect(width - thick, 0, width, height)
-  if (preset === 'box') {
+  if (preset === 'box' || preset === 'rewind') {
     rect(width * .08, height * .1, width * .08 + thick, floor)
     rect(width * .92 - thick, height * .1, width * .92, floor)
     rect(width * .08, height * .1, width * .92, height * .1 + thick)
@@ -113,13 +114,17 @@ export function releaseImage(world: World) {
   effect.fired = true
   const cx = effect.x + effect.width / 2, cy = effect.y + effect.height / 2
   let released = 0
-  for (const i of effect.cells) {
+  for (const [index, i] of effect.cells.entries()) {
     if (world.type[i] !== M.Brick) continue
+    if (world.rewind) {
+      world.rewind.grid[i] = index + 1
+      world.rewind.locations[index + 1] = i + 1
+    }
     world.type[i] = M.Sand; world.life[i] = 0; released++
     const x = i % world.width + .5, y = (i / world.width | 0) + .5
     if (effect.preset === 'sandfall') continue
     const dx = (x - cx) / Math.max(1, effect.width / 2), dy = (y - cy) / Math.max(1, effect.height / 2)
-    if (effect.preset === 'box') world.launch(i, dx * 3.3, dy * 2.4 - 1.8)
+    if (effect.preset === 'box' || effect.preset === 'rewind') world.launch(i, dx * 3.3, dy * 2.4 - 1.8)
     else if (effect.preset === 'split') world.launch(i, (dx < 0 ? -1 : 1) * (1.3 + Math.abs(dx) * 2), -.7 - world.rng())
     else if (effect.preset === 'speakers') world.launch(i, dx * .4, -.4)
     else {
@@ -133,6 +138,7 @@ export function releaseImage(world: World) {
 
 export function attachImageEffect(world: World) {
   // The hook takes its World argument: cloned worlds never call back into the original.
+  if (world.imageEffect?.preset === 'rewind') world.enableRewind()
   world.hooks = { ...world.hooks, drop: releaseImage }
 }
 
@@ -146,4 +152,28 @@ export function restoreImageEffect(world: World, value: unknown) {
     throw new Error('Invalid image preset data.')
   world.imageEffect = { preset: e.preset, fired: e.fired, cells: [...e.cells], x: e.x, y: e.y, width: e.width, height: e.height }
   attachImageEffect(world)
+}
+
+/** Recall only pixels whose original centers fall within this swept brush. */
+export function rewindStroke(world: World, from: { x: number; y: number }, to: { x: number; y: number }, radius: number) {
+  const track = world.rewind, photo = world.imageEffect
+  if (!track || !photo?.fired) return
+  track.holding = true
+  const dx = to.x - from.x, dy = to.y - from.y
+  const lengthSquared = dx * dx + dy * dy
+  for (let index = 0; index < photo.cells.length; index++) {
+    const home = photo.cells[index]
+    const x = home % world.width - from.x, y = Math.floor(home / world.width) - from.y
+    const t = lengthSquared ? Math.max(0, Math.min(1, (x * dx + y * dy) / lengthSquared)) : 0
+    if ((x - dx * t) ** 2 + (y - dy * t) ** 2 > radius * radius) continue
+    const id = index + 1, location = track.locations[id]
+    if (location > 0) {
+      const cell = location - 1
+      if (track.grid[cell] !== id || world.type[cell] !== M.Sand) continue
+      if (cell === home) { world.life[cell] = HELD_SAND; continue }
+      world.launch(cell, 0, 0)
+    }
+    const particle = -track.locations[id] - 1
+    if (particle >= 0 && particle < world.particles && track.air[particle] === id) track.air[particle] = -id
+  }
 }

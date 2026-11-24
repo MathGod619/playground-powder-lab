@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildImageScene, demoImage, fitPresetPhoto, IMAGE_PRESETS, imageRegion, MAX_IMAGE_GRAINS, releaseImage, resizePixels } from '../src/image-presets.ts'
+import { buildImageScene, demoImage, fitPresetPhoto, IMAGE_PRESETS, imageRegion, MAX_IMAGE_GRAINS, releaseImage, resizePixels, rewindStroke } from '../src/image-presets.ts'
 import { pack } from '../src/color.ts'
 import { cloneWorld } from '../src/director-world.ts'
 import { M } from '../src/materials.ts'
@@ -47,7 +47,7 @@ for (const { id } of IMAGE_PRESETS) {
 
 test('the five effects have distinct initial movement and the speaker pit includes real emitters', () => {
   const signatures = new Set()
-  for (const { id } of IMAGE_PRESETS) {
+  for (const { id } of IMAGE_PRESETS.filter(p => p.id !== 'rewind')) {
     const world = buildImageScene(160, 120, id, photo(), seeded())
     releaseImage(world)
     signatures.add(JSON.stringify([world.particles, [...world.vx.slice(0, 4)], [...world.vy.slice(0, 4)]]))
@@ -101,4 +101,66 @@ test('the built-in demo fits the same path as a user photo', () => {
   const size = fitPresetPhoto(demo.width, demo.height, region.maxWidth, region.maxHeight)
   const world = buildImageScene(160, 120, 'box', resizePixels(demo, size.width, size.height))
   assert.ok(world.count(M.Brick) > 1000)
+})
+
+test('swiping reconstructs only the selected original pixels, holds through kicks and releases on the next kick', () => {
+  const w = buildImageScene(160, 120, 'rewind', photo(30, 24), seeded())
+  const e = w.imageEffect
+  const colors = e.cells.map(i => w.color[i])
+  const grains = e.cells.length
+  w.drop()
+  for (let n = 0; n < 240; n++) w.step()
+  assert.equal(w.particles, 0)
+  const left = { x: e.x + 5, y: e.y + 7 }, right = { x: e.x + 23, y: left.y }
+  rewindStroke(w, left, right, 2)
+  assert.ok([...w.rewind.air.subarray(0, w.particles)].some(id => id < 0))
+  for (let n = 0; n < 90; n++) {
+    if (n % 30 === 0) w.onKick(.7)
+    w.step()
+  }
+  let restored = 0
+  for (const [index, i] of e.cells.entries()) {
+    const x = i % w.width, y = Math.floor(i / w.width)
+    const nearest = Math.max(left.x, Math.min(right.x, x))
+    if ((x - nearest) ** 2 + (y - left.y) ** 2 <= 4) {
+      assert.equal(w.rewind.grid[i], index + 1)
+      assert.equal(w.color[i], colors[index])
+      assert.equal(w.life[i], 1)
+      restored++
+    } else assert.notEqual(w.rewind.grid[i], index + 1)
+  }
+  assert.ok(restored > 80 && restored < grains / 4)
+  w.rewind.holding = false
+  w.step()
+  assert.equal(w.life[w.index(left.x + 2, left.y)], 1)
+  w.onKick(.7)
+  for (let n = 0; n < 140; n++) w.step()
+  assert.equal(w.count(M.Sand), grains)
+  assert.ok(e.cells.every((i, n) => w.rewind.grid[i] !== n + 1))
+})
+
+test('Rewind keeps identical colors distinct and preserves in-flight identities through save and clone', () => {
+  const pixels = photo(14, 14)
+  pixels.data.fill(255)
+  const w = buildImageScene(140, 100, 'rewind', pixels, seeded())
+  const e = w.imageEffect, cell = e.cells[18]
+  w.drop()
+  for (let n = 0; n < 140; n++) w.step()
+  const target = { x: cell % w.width, y: Math.floor(cell / w.width) }
+  rewindStroke(w, target, target, 0)
+  for (const copy of [cloneWorld(w), decodeWorld(encodeWorld(w))]) {
+    for (let n = 0; n < 60; n++) copy.step()
+    assert.equal(copy.rewind.grid[cell], 19)
+    assert.equal(copy.count(M.Sand), e.cells.length)
+    assert.equal(w.rewind.grid[cell], 0)
+    copy.paint(target.x, target.y, 2, M.Sand, true)
+    copy.put(cell, M.Sand)
+    rewindStroke(copy, target, target, 0)
+    assert.equal(copy.rewind.grid[cell], 0, 'painted sand never inherits an erased pixel')
+  }
+  const loaded = decodeWorld(encodeWorld(w))
+  loaded.put(cell, M.Wall)
+  for (let n = 0; n < 90; n++) loaded.step()
+  assert.equal(loaded.type[cell], M.Wall)
+  assert.equal(loaded.count(M.Sand), e.cells.length)
 })
